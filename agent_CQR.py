@@ -1,184 +1,175 @@
 import torch
-import torch.nn as nn
 from networks import CQR_DQN
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
+from utils import get_config
 import numpy as np
 import random
-import pdb
-
 
 class CQRAgent():
-    def __init__(self, seed, state_size, action_size, alpha, eta, hidden_size=256, device="cpu"):
+    def __init__(self, state_size, action_size, alpha, eta, hidden_size=256, device="cpu"):
         self.state_size = state_size
         self.action_size = action_size
         self.device = device
-        self.TAU = 1e-2
-        self.GAMMA = 0.99
-        self.BATCH_SIZE = 128
-        self.Q_updates = 0
-        self.n_step = 1
+
+        # 目標網路Soft Update
+        self.tau = 1e-3
+
+        # 折扣回報
+        self.gamma = 0.99
+
+        # 分位數數量
         self.N = 8
+
+        # CQL權重
         self.alpha = alpha
-        self.eta = eta # CQR ---> eta = 1, CQR-CVaR ---> 0 < eta < 1 
+
+        # 分位數位置
+        self.eta = eta
         self.quantile_tau = self.eta * torch.FloatTensor([(2 * i + 1) / (2.0 * self.N) for i in range(0,self.N)]).to(device)
         
-        self.qnetwork_local = CQR_DQN(state_size, action_size, hidden_size, seed, self.N).to(device)
-        self.qnetwork_target = CQR_DQN(state_size, action_size, hidden_size, seed, self.N).to(device)
+        self.network = CQR_DQN(state_size = self.state_size,
+                    action_size = self.action_size,
+                    layer_size = hidden_size,
+                    N = self.N
+                    ).to(self.device)
+        self.target_network = CQR_DQN(state_size = self.state_size,
+                    action_size = self.action_size,
+                    layer_size = hidden_size,
+                    N = self.N
+                    ).to(self.device)
         
-        
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=1e-5)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=1e-4)
 
-    
+    # 根據epsilon-greedy取得動作
     def get_action(self, state, epsilon):
         if random.random() > epsilon:
-            state = np.array(state)
-
             state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-            self.qnetwork_local.eval()
+
+            self.network.eval()
             with torch.no_grad():
-                action_values = self.qnetwork_local.get_action(state)
-            self.qnetwork_local.train()
+                action_values = self.network.get_action(state)
+            self.network.train()
+
             action = np.argmax(action_values.cpu().data.numpy())
         else:
-            action = random.choice(np.arange(self.action_size))
+            action = random.choices(np.arange(self.action_size))
         return action
-    
-    ################################################ Independent ################################################
-    def cql_loss_ind(self, q_values, current_action, current_batch_size):
-        """Computes the CQL loss for a batch of Q-values and actions."""
-        logsumexp = torch.logsumexp(q_values, dim=2, keepdim=True)
-        q_a = q_values.gather(2, current_action.unsqueeze(-1).expand(current_batch_size, self.N, 1))
-        return (logsumexp - q_a).sum(1).mean()
 
-    def learn_cqr_ind(self, experiences):
+    # 計算CQL Loss  
+    def CQL_Loss_Calc(self, q_values, current_action):
+        logsumexp = torch.logsumexp(q_values, dim=2, keepdim=True)
+        q_a = q_values.gather(2, current_action.repeat(1, self.N).unsqueeze(-1))
+
+        return (logsumexp - q_a).sum(dim=1).mean()
+
+    # 計算Huber Loss
+    def Huber_Loss_Calc(self, td_error, kappa=1.0):
+        loss = torch.where(td_error.abs() <= kappa, 0.5 * td_error.pow(2), kappa * (td_error.abs() - 0.5 * kappa))
+        return loss
+
+    # 計算Loss        
+    def Loss_Calc(self, CQL_loss, Qt_expected, Qt_targets):
+
+        # 計算TD誤差，每個預測分位數都與所有目標分位數計算誤差
+        # (B, 1, N) - (B, N, 1) 
+        td_error = Qt_targets - Qt_expected
+
+        # 計算Huber Loss
+        huber_loss = self.Huber_Loss_Calc(td_error, kappa = 1.0)
+
+        # 計算Quantile Loss
+        # TD Error >= 0 (低估)，權重為τ
+        # TD Error < 0 (高估)，權重為(1-τ)
+        loss_weight = abs(self.quantile_tau - (td_error.detach() < 0).float())
+        quantile_loss = loss_weight * huber_loss
         
-        self.optimizer.zero_grad()
+        # 先計算對於每個目標分位數的Loss總和，再對所有目標分位數取平均，最後對批次取平均
+        quantile_loss = quantile_loss.sum(dim=1).mean(dim=1).mean()
+
+        # 計算Loss
+        # 前項為CQL項，後項為Quantile項
+        # 僅保留後項則退化為QR-DQN
+        loss = self.alpha * CQL_loss + 0.5 * quantile_loss
+
+        return loss
+
+    # 取得目標Quantile與預測Quantile
+    def get_Qt_value(self, experiences, U):
+        # 拆分經驗樣本
         states, actions, rewards, next_states, dones = experiences
 
-        Q_targets_next = self.qnetwork_target(next_states).detach().cpu() #.max(2)[0].unsqueeze(1) #(batch_size, 1, N)
+        with torch.no_grad():
+            # 取得批次下狀態的所有動作的分位數估計
+            Qt_targets_next = self.target_network(next_states).detach() # shape: (B, N, A)
 
-        current_batch_size = Q_targets_next.size(0)
+            # 對分位數估計取平均
+            Q_targets_next = Qt_targets_next.mean(dim=1) # shape: (B, A)
 
-        action_indx = torch.argmax(Q_targets_next.mean(dim=1), dim=1, keepdim=True)
-        
-        Q_targets_next = Q_targets_next.gather(2, action_indx.unsqueeze(-1).expand(current_batch_size, self.N, 1)).transpose(1,2)
+            # 取得平均分位數估計最大的動作
+            actions_expected = torch.argmax(Q_targets_next, dim=1, keepdim=True) # Shape: (B, 1)
 
-        
-        assert Q_targets_next.shape == (current_batch_size,1, self.N)
-        Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next.to(self.device) * (1 - dones.unsqueeze(-1)))
-        Q_expected = self.qnetwork_local(states).gather(2, actions.unsqueeze(-1).expand(current_batch_size, self.N, 1))
-        
-        Q_expected_c = self.qnetwork_local(states)
-        
-        td_error = Q_targets - Q_expected
-        assert td_error.shape == (current_batch_size, self.N, self.N), "wrong td error shape"
-        huber_l = self.calculate_huber_loss_ind(td_error, 1.0)
-        quantil_l = abs(self.quantile_tau -(td_error.detach() < 0).float()) * huber_l / 1.0
-        
-        loss = quantil_l.sum(dim=1).mean(dim=1) # , keepdim=True if per weights get multipl
-        loss = loss.mean()
-        
-        cql1_loss = self.cql_loss_ind(Q_expected_c, actions, current_batch_size)
+            # 取得批次下狀態最佳動作的分位數估計
+            Qt_targets_next = Qt_targets_next.gather(2, actions_expected.repeat(1, self.N).unsqueeze(-1)) # Shape: (B, N, 1)
 
-        
-        q1_loss = self.alpha*cql1_loss + 0.5 * loss # CQR ---> alpha = 1, QR ---> alpha = 0
+            # Reshape以便後續Loss計算
+            Qt_targets_next = Qt_targets_next.transpose(1,2) # Shape: (B, 1, N)
 
-        q1_loss.backward()
-        #clip_grad_norm_(self.qnetwork_local.parameters(),1)
+            # 計算目標Q值
+            Qt_targets = (rewards / U).unsqueeze(-1) + (self.gamma * Qt_targets_next.to(self.device) * (1 - dones.unsqueeze(-1)))
+
+        # 取得期望Q值
+        Qt_expected = self.network(states).gather(2, actions.repeat(1, self.N).unsqueeze(-1)) # Shape: (B, N, 1)
+
+        return Qt_targets, Qt_expected
+
+    def Learn_CQR_ind(self, experiences):
+        # 拆分經驗樣本
+        states, actions, _, _, _ = experiences
+
+        # 取得目標Quantile與預測Quantile
+        Qt_targets, Qt_expected = self.get_Qt_value(experiences, U = 1)
+
+        # 取得該狀態所有動作的Quantile
+        Qt_a_s = self.network(states)
+
+        # 計算CQL Loss
+        CQL_loss = self.CQL_Loss_Calc(Qt_a_s, actions)
+
+        # 計算Loss
+        loss = self.Loss_Calc(CQL_loss, Qt_expected, Qt_targets)
+        
+        # 更新預測網路
+        self.optimizer.zero_grad()
+        loss.backward()
+        clip_grad_norm_(self.network.parameters(), 1.)
         self.optimizer.step()
 
-        # ------------------- update target network ------------------- #
-        self.soft_update_ind(self.qnetwork_local, self.qnetwork_target)
-        return q1_loss.detach().item()
+        # 更新目標網路
+        self.soft_update(self.network, self.target_network)
 
-    def calculate_huber_loss_ind(self,td_errors, k=1.0):
-        """
-        Calculate huber loss element-wisely depending on kappa k.
-        """
-        loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
-        assert loss.shape == (td_errors.shape[0], self.N, self.N), "huber loss has wrong shape"
-        return loss
+        return loss.detach().item()
     
+    def Learn_CQR_cent(self, experiences):
+        config = get_config()
+
+        # 拆分經驗樣本
+        states, actions, _, _, _ = experiences
+
+        # 取得目標Quantile與預測Quantile
+        Qt_targets, Qt_expected = self.get_Qt_value(experiences, U = config.U)
     
-    def soft_update_ind(self, local_model, target_model):
-        """Soft update model parameters.
-        θ_target = τ*θ_local + (1 - τ)*θ_target
-        Params
-        ======
-            local_model (PyTorch model): weights will be copied from
-            target_model (PyTorch model): weights will be copied to
-            tau (float): interpolation parameter 
-        """
+        # 取得該狀態所有動作的Quantile
+        Qt_a_s = self.network(states)
+
+        # 計算CQL Loss
+        CQL_loss = self.CQL_Loss_Calc(Qt_a_s, actions)
+        
+        # 回傳至MA_CCQR進行聚合
+        return CQL_loss, Qt_expected, Qt_targets
+
+    # Soft-Update目標網路
+    def soft_update(self, local_model, target_model):
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(self.TAU*local_param.data + (1.0-self.TAU)*target_param.data)
+            target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
             
-    ################################################ Centralized ################################################
-    
-    def cql_loss_cent(self, q_values, current_action, current_batch_size):
-        """Computes the CQL loss for a batch of Q-values and actions."""
-        logsumexp = torch.logsumexp(q_values, dim=2, keepdim=True)
-
-        q_a = q_values.gather(2, current_action.unsqueeze(-1).expand(current_batch_size, self.N, 1))
-
-        return (logsumexp - q_a).sum(1).mean()
-
-    def learn_cqr_cent(self, experiences):
-        """Update value parameters using given batch of experience tuples.
-        Params
-        ======
-            experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
-        """
-        self.optimizer.zero_grad()
-        states, actions, rewards, next_states, dones = experiences
-        
-        # Get max predicted Q values (for next states) from target model
-        Q_targets_next = self.qnetwork_target(next_states).detach().cpu() #.max(2)[0].unsqueeze(1) #(batch_size, 1, N)
-
-        self.current_batch_size = Q_targets_next.size(0)
-        
-        action_indx = torch.argmax(Q_targets_next.mean(dim=1), dim=1, keepdim=True)
-
-        
-        Q_targets_next = Q_targets_next.gather(2, action_indx.unsqueeze(-1).expand(self.current_batch_size, self.N, 1)).transpose(1,2)
-
-        
-        assert Q_targets_next.shape == (self.current_batch_size,1, self.N)
-        # Compute Q targets for current states 
-        Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next.to(self.device) * (1 - dones.unsqueeze(-1)))
-        # Get expected Q values from local model
-        Q_expected = self.qnetwork_local(states).gather(2, actions.unsqueeze(-1).expand(self.current_batch_size, self.N, 1))
-        
-        Q_expected_c = self.qnetwork_local(states)
-        
-        
-        cql1_loss = self.cql_loss_cent(Q_expected_c, actions, self.current_batch_size)
-        
-        return cql1_loss, Q_expected, Q_targets
-        
-        
-    def loss_calc_cent(self,cql1_loss, Q_expected, Q_targets):
-        
-        td_error = Q_targets - Q_expected
-        
-        assert td_error.shape == (self.current_batch_size, self.N, self.N), "wrong td error shape"
-        huber_l = self.calculate_huber_loss_cent(td_error, 1.0)
-        quantil_l = abs(self.quantile_tau -(td_error.detach() < 0).float()) * huber_l / 1.0
-
-        loss = quantil_l.sum(dim=1).mean(dim=1) # , keepdim=True if per weights get multipl
-        loss = loss.mean()
-
-        q1_loss = self.alpha*cql1_loss + 0.5 * loss # alpha = 1
-        
-        return q1_loss
-    
-    
-    def calculate_huber_loss_cent(self,td_errors, k=1.0):
-        """
-        Calculate huber loss element-wisely depending on kappa k.
-        """
-        loss = torch.where(td_errors.abs() <= k, 0.5 * td_errors.pow(2), k * (td_errors.abs() - 0.5 * k))
-        assert loss.shape == (td_errors.shape[0], self.N, self.N), "huber loss has wrong shape"
-        return loss

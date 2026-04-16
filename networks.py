@@ -6,7 +6,7 @@ class DDQN(nn.Module):
         super(DDQN, self).__init__()
         self.input_shape = state_size
         self.action_size = action_size
-        self.head_1 = nn.Linear(self.input_shape[0], layer_size)
+        self.head_1 = nn.Linear(self.input_shape, layer_size)
         self.ff_1 = nn.Linear(layer_size, layer_size)
         self.ff_2 = nn.Linear(layer_size, action_size)
 
@@ -18,14 +18,13 @@ class DDQN(nn.Module):
         return out
 
 class CQR_DQN(nn.Module):
-    def __init__(self, state_size, action_size,layer_size, seed, N, layer_type="ff"):
+    def __init__(self, state_size, action_size,layer_size, N):
         super(CQR_DQN, self).__init__()
-        self.seed = torch.manual_seed(seed)
         self.input_shape = state_size
         self.action_size = action_size
         self.N = N
 
-        self.head_1 = nn.Linear(self.input_shape[0], layer_size)
+        self.head_1 = nn.Linear(self.input_shape, layer_size)
         self.ff_1 = nn.Linear(layer_size, layer_size)
         self.ff_2 = nn.Linear(layer_size, action_size*N)
 

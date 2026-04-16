@@ -1,116 +1,95 @@
-
-import numpy as np
-from collections import deque
-import torch
-import argparse
-from buffer import ReplayBuffer
-import glob
-from utils import collect_random, get_config, eval_runs, eval_runs_dist, prep_dataloader, loss_update_cent
-import random
-from agent_CQR import CQRAgent
-
-import numpy as np
-import matplotlib.pyplot as plt
-from random import randrange
-import math
-import copy
-import random
-import itertools
-import torch
-from collections import deque
 import pandas as pd
-from Environment import environment
+import torch
+from utils import get_config, eval_runs_dist, prep_dataloader, loss_update_cent, RNGManager
+from agent_CQR import CQRAgent
+from Environment import Environment
+import matplotlib.pyplot as plt
 
-
-def Train_MA_CCQR(Model,Dev_Coord,Risky_region,alpha,eta):
+def Train_MA_CCQR(model,device_coord,risky_region,alpha,eta):
+    # 初始化RNG, 環境與超參數
     config = get_config()
-    np.random.seed(config.seed)
-    random.seed(config.seed)
-    torch.manual_seed(config.seed)
-
-    env = environment(Dev_Coord,Risky_region,config)
+    rng = RNGManager()
+    env = Environment(device_coord,risky_region,config)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    Episode_Reward = []
-    gamma = 0.99
-    
-    agent = []
+    # 預處理Dataset
+    df_src = fr"{config.PATH}\Datasets\Dataset_Online_DQN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.csv"
+    dataset = pd.read_csv(df_src)
+    dataloader = prep_dataloader(config.U*2 + config.M, dataset, config.U, batch_size=config.batch_size_offline)
 
-    Num_UAVs_str = str(config.U)
-    penalty_str = str(config.penalty)
-    data_size_perc_str = str(config.data_size_perc)
-
-    dataset = pd.read_csv(config.PATH+r'Datasets\Dataset_Online_DQN_'+data_size_perc_str+'%_'+Num_UAVs_str+'UAVs_pen_'+penalty_str+'.csv')
-
-    dataloader = prep_dataloader(config.U*2 + config.M, dataset, config.U, batch_size=config.Batch_offline)
-
+    # 初始化Agent
+    agents = []
     for u in range(config.U):
-        agent_u = CQRAgent(seed=config.seed, state_size=env.observation_space.shape,
-                     action_size=env.action_space.shape[0],
-                     alpha=alpha,
+        agent = CQRAgent(state_size = env.nObservation,
+                     action_size = env.nAction,
+                     alpha = alpha,
                      eta = eta,
-                     device=device)
-        agent.append(agent_u)
+                     device = device)
+        agents.append(agent)
 
+    eval_rewards = []
 
-    batches = 0
+    for epoch in range(1, config.epochs + 1):
+        # 從dataset進行CQL訓練
+        for _, experience in enumerate(dataloader):
 
-
-    eval_reward = eval_runs_dist(env, agent)
-
-    for i in range(1, config.epochs+1):
-        for batch_idx, experience in enumerate(dataloader):
+             # 拆分經驗樣本
             states, actions, rewards, next_states, dones = experience
+
             states = states.to(device)
             actions = actions.to(device)
             rewards = rewards.to(device)
             next_states = next_states.to(device)
             dones = dones.to(device)
 
+            # 價值聚合
+            loss_CQL_c= 0
+            Qt_expected_c = 0
+            Qt_target_c = 0
+
             for u in range(config.U):            
-                loss_CQL, Q_exp, Q_tar = agent[u].learn_cqr_cent((states, actions[:,[u]], rewards, next_states, dones))
+                loss_CQL, Q_expected, Q_target = agents[u].Learn_CQR_cent((states, actions[:,[u]], rewards, next_states, dones))
 
-                if(u==0):
-                    loss_CQL_All = loss_CQL
-                    Q_exp_All = Q_exp
-                    Q_tar_All = Q_tar
-                else:
-                    loss_CQL_All = loss_CQL_All + loss_CQL
-                    Q_exp_All = Q_exp_All + Q_exp
-                    Q_tar_All = Q_tar_All + Q_tar
+                loss_CQL_c += loss_CQL
+                Qt_expected_c += Q_expected
+                Qt_target_c += Q_target
 
-            loss_tensor = agent[u].loss_calc_cent(loss_CQL_All,Q_exp_All,Q_tar_All)
-            Net_params = list(agent[0].qnetwork_local.parameters()) + list(agent[1].qnetwork_local.parameters())
-            Tar_params = list(agent[0].qnetwork_target.parameters()) + list(agent[1].qnetwork_target.parameters())
+            # 計算Loss
+            loss_tensor = agents[u].Loss_Calc(loss_CQL_c, Qt_expected_c, Qt_target_c)
+    
+            # 更新預測網路與目標網路
+            network_param = list(agents[0].network.parameters()) + list(agents[1].network.parameters())
+            target_param = list(agents[0].target_network.parameters()) + list(agents[1].target_network.parameters())
+            optimizer = torch.optim.Adam(params = network_param, lr=1e-4)
+            loss = loss_update_cent(loss_tensor, network_param ,target_param, optimizer)
 
-            optimizer = torch.optim.Adam(params=Net_params, lr=1e-4)
-            loss = loss_update_cent(loss_tensor,Net_params,Tar_params,optimizer)
+        # 定時進行測試評估
+        if epoch % config.eval_periods == 0:
+            eval_reward = eval_runs_dist(env, agents, rng)
+            eval_rewards.append(eval_reward)
 
+            print(f"Epoch: {epoch} | Eval_Reward: {eval_reward} | Q Loss: {loss}")
 
-        if i % config.eval_every == 0:
-            eval_reward = eval_runs_dist(env, agent)
-
-            Episode_Reward.append(eval_reward)
-            print("Epoch: {} | Reward: {} | Q Loss_: {}".format(i, eval_reward, loss,))
-
-
+    # 儲存模型參數
     for u in range(config.U):
-        u_str = str(u)
-        torch.save(agent[u].qnetwork_local.state_dict(), config.PATH+r'Saved_Models\\'+Model+'_offline_'+data_size_perc_str+'%_UAV_'+u_str+'_pen_'+penalty_str+'.pth')
+        model_src = fr"{config.PATH}\Saved_Models\Model_Offline_{model}_{str(config.data_size)}%_UAV_{str(u)}_{str(config.penalty)}pen.pth"
+        torch.save(agents[u].network.state_dict(), model_src)
+
+    # 產生圖表
+    fig_src = fr"{config.PATH}\Results\Result_Offline_{model}_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.png"
+    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Offline_{model}_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.csv"
+
+    window_size = 10
+    eval_rewards_smooth = pd.Series(eval_rewards).rolling(window=window_size).mean()
 
     plt.figure(figsize=(12, 6))
-    window_size = 10
-    Episode_Reward_smooth = pd.Series(Episode_Reward).rolling(window=window_size).mean()
-    plt.plot(Episode_Reward_smooth, label='Reward')
+    plt.plot(eval_rewards_smooth, label='Reward')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
-    plt.title(f'MA_{Model} Reward')
+    plt.title(f'MA_{model} Reward')
     plt.legend()
     plt.grid(True)
-    plt.savefig(config.PATH+r'Results\\'+Model+'_offline_'+data_size_perc_str+'_pen_'+penalty_str+'.png')
-    pd.DataFrame(Episode_Reward).to_csv(config.PATH+r'Result_Datas\\'+Model+'_offline_'+data_size_perc_str+'_pen_'+penalty_str+'.csv', index=False)
-    # 讀取 CSV 以還原 Episode_Reward
-    # Episode_Reward_loaded = pd.read_csv(config.PATH+r'Results\\'+Model+'_offline_'+data_size_perc_str+'%_UAV_'+u_str+'_pen_'+penalty_str+'_rewards.csv').iloc[:, 0].tolist()
-    
-    
+
+    plt.savefig(fig_src)
+    pd.DataFrame(eval_rewards).to_csv(fig_data_src, index=False)

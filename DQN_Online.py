@@ -3,133 +3,115 @@ import numpy as np
 import pandas as pd
 import torch
 from buffer import ReplayBuffer
-from utils import collect_random, get_config, eval_runs
-import random
+from utils import collect_random, get_config, eval_runs, RNGManager
 from agent_Online_DQN import DQNAgent
-from Environment import environment
+from Environment import Environment
 import matplotlib.pyplot as plt
 
-
-def Train_DQN_Online(Dev_Coord,Risky_region):
+def Train_DQN_Online(device_coord,Risky_region):
+    # 初始化RNG, 環境與超參數
     config = get_config()
-
-    np.random.seed(config.seed)
-    random.seed(config.seed)
-    torch.manual_seed(config.seed)
-
-    env = environment(Dev_Coord,Risky_region,config)
+    rng = RNGManager()
+    env = Environment(device_coord,Risky_region,config)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     eps = 1.
-    d_eps = 1 - config.min_eps
-    steps = 0
-    total_steps = 0
+    steps = 0 
 
-    agent = []
-    buffer = []
-
+    # 初始化Agent與ReplayBuffer
+    agents = []
+    buffers = []
     for i in range(config.U):
-        agent_u = DQNAgent(state_size=env.observation_space.shape,
-                     action_size=env.action_space.shape[0],
-                     device=device)
-        buffer_u = ReplayBuffer(buffer_size=config.buffer_size, batch_size=config.Batch_online, device=device)
-        agent.append(agent_u)
-        buffer.append(buffer_u)
+        agent = DQNAgent(state_size = env.nObservation,
+                           action_size = env.nAction,
+                           device = device)
+        buffer = ReplayBuffer(buffer_size = config.buffer_size, 
+                              batch_size = config.batch_size_online, 
+                              device = device)
+        agents.append(agent)
+        buffers.append(buffer)
 
-    collect_random(env=env, U=config.U, dataset=buffer, num_samples=500)
+    # 透過隨機採取動作，於環境進行500步後，作為每個Agent的Replay Buffer
+    collect_random(env=env, U=config.U, dataset=buffers, steps=500)
 
-    df_0 = pd.DataFrame()
-    df_1 = pd.DataFrame()
-    cntt = 0
+    # 試算表
     df = []
 
-    Episode_Reward = []
-    Episode_0_reward = []
-    Episode_1_reward = []
+    # 評估獎勵
+    eval_rewards = [] 
 
-    Eval_Reward = []
-
-
-    for i in range(1, config.episodes+1):
-        state = env.reset()
-        episode_steps = 0
-        rewards = 0
-        action = [0] * config.U
-        loss = [0] * config.U
-        reward_all = np.zeros(config.U)
+    for episode in range(1, config.episodes + 1):
+        # 初始化
+        states = env.reset()
+        actions = [0] * config.U
+        episode_reward = 0 # 本次Episode的全局獎勵
+        agent_rewards = np.zeros(config.U) # 個別Agent的獎勵
 
         while True:
-            dataset_offline = []
+            # 個別UAV取得動作並執行
             for u in range(config.U):
-                action_u = agent[u].get_action(state, epsilon=eps)
-                action[u] = action_u[0]
-            steps += 1
-            next_state, reward, done = env.step(state,action)
+                actions[u] = agents[u].get_action(states, epsilon=eps)[0]
 
+            next_states, rewards, done = env.step(states, actions)
+
+            # 紀錄Experiment至Replay Buffer並採樣訓練
             for u in range(config.U):
-                buffer[u].add(state, [action[u]], reward[u], next_state, done[u])
-                reward_all[u] = reward_all[u] + reward[u]
+                buffers[u].add(states, [actions[u]], rewards[u], next_states, done[u])
+                agent_rewards[u] += rewards[u]
 
+                if env.done[u] == 0:
+                    agents[u].Learn_DQN(buffers[u].sample())
+            episode_reward += env.total_reward
 
-            for u in range(config.U):
-                if(env.done[u]==0):
-                    loss[u], bellmann_error_0 = agent[u].learn_dqn(buffer[u].sample())
-
-                    dataset_offline = np.concatenate((state,[action[u]],[reward[u]],next_state,[done[u]]))
-
-                    if(cntt == 0):
-                        df.append(pd.DataFrame([dataset_offline]))
-                    else:
-                        df[u].loc[len(df[u])] = dataset_offline
-
-
-            dataset_offline_ALL_Agents = np.concatenate((state,action,[reward[0]],next_state,[done[0]]))
-            if(cntt == 0):
-                df_ALL_AGENTS=pd.DataFrame([dataset_offline_ALL_Agents])
+            # 將Experiment紀錄為Offline Dataset
+            dataset = np.concatenate((states, actions,[rewards[0]],next_states,[done[0]]))
+            if(steps == 0):
+                df = pd.DataFrame([dataset])
             else:
-                df_ALL_AGENTS.loc[len(df_ALL_AGENTS)] = dataset_offline_ALL_Agents
+                df.loc[len(df)] = dataset
 
-            state = next_state.copy()
-            cntt = cntt + 1
+            steps += 1
+            states = next_states.copy()
+            eps = max(1 - ((steps * (1 - config.min_eps)) / config.eps_frames), config.min_eps)
 
-            rewards += env.Total_reward
-            episode_steps += 1
-            eps = max(1 - ((steps*d_eps)/config.eps_frames), config.min_eps)
             if env.DONE:
                 break
 
-        Episode_Reward.append(rewards)
-        Episode_0_reward.append(reward_all[0])
-        Episode_1_reward.append(reward_all[1])
+        print(f"Episode: {episode} | Reward: {episode_reward} | Reward_u{agent_rewards} | Steps: {steps}")
 
-        total_steps += episode_steps
-        print("Episode: {} | Reward: {} | reward_u{} | Steps: {}".format(i, rewards, reward_all, steps,))
+        # 定時進行測試評估
+        if i % config.eval_periods == 0:
+            eval_reward = eval_runs(env, agents, rng)
+            eval_rewards.append(eval_reward)
 
-        if i % config.eval_every == 0:
-            eval_reward = eval_runs(env, agent)
-            Eval_Reward.append(eval_reward)
+            print(f"Eval_Reward: {eval_reward}")
+    
 
-            print("Episode: {} | Reward: {}".format(i, eval_reward))
+    # 產生CSV
+    df_src = fr"{config.PATH}\Datasets\Dataset_Online_DQN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
     
-    Num_UAVs_str = str(config.U)
-    penalty_str = str(config.penalty)
-    data_size_perc_str = str(config.data_size_perc)
+    save_start = int((config.episodes * env.max_steps)/2)
+    save_end = int(save_start + config.data_size * (config.episodes * env.max_steps)/100)
     
-    save_start = int((config.episodes * env.length_episode)/2)
-    save_end = int(save_start + config.data_size_perc * (config.episodes * env.length_episode)/100)
+    df = df.iloc[save_start:save_end]
     
-    df_CTDE = df_ALL_AGENTS.iloc[save_start:save_end]
-    df_CTDE.to_csv(config.PATH+r'Datasets\Dataset_Online_DQN_'+data_size_perc_str+'%_'+Num_UAVs_str+'UAVs_pen_'+penalty_str+'.csv')
+    df.to_csv(df_src)
     
-    plt.figure(figsize=(12, 6))
+    # 產生圖表
+    fig_src = fr"{config.PATH}\Results\Result_Online_DQN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.png"
+    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Online_DQN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
+
     window_size = 10
-    Episode_Reward_smooth = pd.Series(Eval_Reward).rolling(window=window_size).mean()
-    plt.plot(Episode_Reward_smooth, label='Reward')
+    eval_rewards_smooth = pd.Series(eval_rewards).rolling(window=window_size).mean()
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(eval_rewards_smooth, label='Reward')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
     plt.title('Online DQN Reward')
     plt.legend()
     plt.grid(True)
-    plt.savefig(config.PATH+r'Results\\Result_Online_DQN_'+data_size_perc_str+'%_'+Num_UAVs_str+'UAVs_pen_'+penalty_str+'.png')
-    pd.DataFrame(Eval_Reward).to_csv(config.PATH+r'Result_Datas\\Result_Online_DQN_'+data_size_perc_str+'_pen_'+penalty_str+'.csv', index=False)
+
+    plt.savefig(fig_src)
+    pd.DataFrame(eval_rewards).to_csv(fig_data_src, index=False)

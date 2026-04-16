@@ -3,172 +3,189 @@ import random
 import itertools
 import math
 
-
-class environment():
-    A_max = 100 # max. AOI
-    Bo = 10**(-30/10) # channel gain (-30 dB)
-    h = 100 # UAV height in meters
-    xc = 100 # horizontal distance between cells centers
-    yc = 100 # vertical distance between cells centers
-    B = 1e6 # bandwidth
-    S = 5e6 # packet size
-    sigma = (10**(-100/10)) * (10e-3) # noise (-100 dBm)
-
-    steps_mov = 2
+def generate_unique_coords(N):
+    """
+    生成 N 個不重複的整數座標，範圍在 [0,0] ~ [9,9]
     
-    v_u = np.matrix([[0, 0], # movement action (N,S,E,W,NE,NW,SE,SW,I)
+    回傳：
+        np.array shape = (N, 2)
+    """
+    assert 0 <= N <= 100, "N 不能超過 100（因為總共只有 10x10 個點）"
+    
+    # 建立所有可能座標 (100 個)
+    all_coords = np.array([(x, y) for x in range(10) for y in range(10)])
+    
+    # 隨機選 N 個（不重複）
+    indices = np.random.choice(len(all_coords), size=N, replace=False)
+    
+    return all_coords[indices]
+
+
+class Environment():
+    CHANNEL_GAIN = 10**(-30/10) # 通道增益(-30 dB)
+    H = 100 # UAV高度
+    CELL_DISTANCE = 100 # 單元格之間的距離
+    B = 1e6 # 頻寬
+    PACKET_SIZE = 5e6 # 封包大小
+    SIGMA = (10 ** (-100/10)) * (10e-3) # 雜訊功率 (-100 dBm)
+
+    steps_mov = 2 # 每個時間步的最大位移(論文中steps_mov = 1)
+    
+    V = np.matrix([[0, 0], # 移動向量(Idle, E, W, N, S)
                    [steps_mov,0],
                    [-steps_mov,0],
                    [0,steps_mov],
                    [0,-steps_mov]])
-    length_episode = 100
     
-    ###################################################################################################
-    def __init__(self, Dev_Coord, Risky_region,config):
-        self.Dev_Coord = Dev_Coord
+    max_steps = 100 # 最大步數，到達該步數後終止環境
+    
+    def __init__(self, device_coord, risky_region,config):
+        self.device_coord = device_coord
+        self.risky_region = risky_region
+
         self.M = config.M
         self.U = config.U
-        self.Num_Cells = config.Num_Cells
-        self.DELTA = config.DELTA
+        self.nCell = config.nCell
+        self.energy_weight = config.energy_weight
         self.penalty = config.penalty
         self.prob_of_risk = config.prob_of_risk
         
-        self.A_m_max = 100
-        self.directions = 5
-        
-        a1 = list(range(0,self.M+1)) # select one of the devices or select none.
-        a3 = list(range(0,self.directions)) # move up, down, right, left or don't move.
-        a5 = list([a1,a3])
-        self.all_actions = list(itertools.product(*a5))
-        self.action_space = np.arange((self.M+1)*self.directions)
-        self.observation_space = np.append(np.zeros(self.U*2),np.ones(self.M))
-        
-        self.Risky_region = Risky_region
-    ###################################################################################################
-    def reset(self):        
-        self.UAV_init_coord = np.array([])
-        for i in range(self.U):
-            self.init = np.random.randint(self.Num_Cells, size=2)
-            while(any(np.array_equal(x, self.init) for x in self.Risky_region)):
-                self.init = np.random.randint(self.Num_Cells, size=2) # make sure UAV is out or risky region
-            self.UAV_init_coord = np.append(self.UAV_init_coord,self.init)
-        
-        self.A_m = []
-        self.cntt = 1
-        self.done = np.zeros(self.U)
-        self.DONE = 0
-        self.risk_indicator = [0] * self.U
-        
-        self.A_m = np.ones(self.M) # append number of initial age for all devices
-        
-            
-        return np.concatenate((np.asarray(self.UAV_init_coord).reshape(-1), self.A_m), axis=None)
-    
-    ###################################################################################################
-    def AoI_Calc(self,DEV_chosen,A_m):
-        if(DEV_chosen < self.M):
-            A_m[DEV_chosen] = 1
-        return A_m
+        self.AOI_max = 100 # 最大AOI限制
 
-    ###################################################################################################
-    def Update_Trajec(self,l_U,V_n_Rnd):
-        check_0 = 0 # check for exceeding grid coordinates
-        l_U = l_U+V_n_Rnd
-        for i in range(2):
-            l_U[0,i] = max(0,l_U[0,i])
-            l_U[0,i] = min(self.Num_Cells-1,l_U[0,i])
+        action_select = list(range(0,self.M+1)) # 不選擇/選擇一個Device
+        action_move = list(range(0,5)) # 移動動作(Idle, E, W, N, S)
+        self.action_space = list(itertools.product(action_select, action_move)) # 動作組合(笛卡兒積)
+
+        self.nAction = len(self.action_space)
+        self.nObservation = self.U * 2 + self.M
         
-        l_U = np.asarray(l_U).reshape(-1)
-        return l_U
+    # 重置環境
+    def reset(self):        
+
+        self.device_coord = generate_unique_coords(10)
+
+        # 初始化UAV位置
+        self.UAVs_init_coord = np.array([])
+        for _ in range(self.U):
+            UAV_coord = np.random.randint(self.nCell, size=2) # 隨機初始化UAV位置
+            while(any(np.array_equal(r, UAV_coord) for r in self.risky_region)): # 如果存在UAV位於風險區域則重抽
+                UAV_coord = np.random.randint(self.nCell, size=2) 
+            self.UAVs_init_coord = np.append(self.UAVs_init_coord, UAV_coord)
         
-    ###################################################################################################
-    def Min_Power(self,dev,L_U):
-        if(dev<self.M):
-            MIN_Rd = self.xc*math.dist(L_U, self.Dev_Coord[dev])
-            MIN_PWR = ((MIN_Rd**2+self.h**2)*(2**(self.S/self.B)-1)*self.sigma)/self.Bo
+        self.AOI = np.ones(self.M) # 初始化AoI
+
+        self.steps = 1
+
+        self.done = np.zeros(self.U) # 個別UAV是否已完成
+        self.DONE = 0 # 整體環境是否終止
+
+        self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
+            
+        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
+    
+    # 重置AOI
+    def AOI_Reset(self, device):
+        if device < self.M:
+            self.AOI[device] = 1
+
+    # 更新UAV的位置
+    def Update_Location(self, U_loc, V_selected):
+        U_loc = U_loc + V_selected
+
+        # 檢查(x,y)是否超過邊界
+        for i in [0,1]:
+            U_loc[0,i] = max(0, U_loc[0,i])
+            U_loc[0,i] = min(self.nCell - 1, U_loc[0,i])
+        
+        U_loc = np.asarray(U_loc).reshape(-1)
+        return U_loc
+        
+    # 必要的傳輸功率
+    def Power_Calc(self, device , U_loc):
+        if device < self.M:
+            h_dist = self.CELL_DISTANCE * math.dist(U_loc, self.device_coord[device])
+            MIN_PWR = (h_dist ** 2 + self.H ** 2) * (2 ** (self.PACKET_SIZE/self.B) - 1) * self.SIGMA / self.CHANNEL_GAIN
         else:
             MIN_PWR = 0
-        return MIN_PWR*self.DELTA
+        return MIN_PWR * self.energy_weight
     
-    ###################################################################################################
-    def Reward_Calc(self,A_m,Pwr):
+    # 獎勵計算
+    def Reward_Calc(self, AOI, power):
         reward = 0
-        reward = reward-Pwr-(np.sum(A_m)/self.M)
+        reward = reward - power - (np.sum(AOI)/self.M)
         return reward
     
-    ###################################################################################################  
-    def Risk_prob(self,l_U):
-        if(any(np.array_equal(x, l_U) for x in self.Risky_region)):
+    # 風險機率  
+    def Risk_prob(self, U_loc):
+        if(any(np.array_equal(r, U_loc) for r in self.risky_region)):
             risk = self.prob_of_risk
         else:
             risk = 0
         return risk
     
-    ###################################################################################################  
-    def step(self,state,Action_all):
+    # 執行環境
+    def step(self, states, actions):
         
-        self.L_U = state[0:self.U*2]
-        self.A_m = state[self.U*2:self.U*2+self.M]
+        # 拆分狀態
+        self.U_loc = states[0 : self.U*2]
+        self.AOI = states[self.U*2 : self.U*2 + self.M]
         
-        self.A_m = np.minimum(self.A_m+1,self.A_m_max) # age increment
-        
-        self.Pwr = 0
-        deduction = 0
-        L_U_new = np.zeros(self.U*2)
-        reward = [0]*self.U
-        
-        
-        for u_cntt in range(self.U): # loop for the number of agents
-            L_U_ind = self.L_U[u_cntt*2:u_cntt*2+2] # Location of agent i
-            action_chosen = Action_all[u_cntt] # Agent i action
-            action = self.all_actions[action_chosen]
-            action = np.array(action)
+        # AOI自然增長
+        self.AOI = np.minimum(self.AOI + 1, self.AOI_max)
 
-            self.dev_chosen = action[0] # served device by agent i
-            self.MOV_DIR = action[1] 
-            self.v_n_rnd = self.v_u[self.MOV_DIR] # movement direction by agent i
+        self.power = 0
+        U_loc_next = np.zeros(self.U*2)
+        rewards = [0]*self.U
+        
+        for u in range(self.U):
+
+            # 取得UAV當前位置與動作
+            u_loc = self.U_loc[u*2:u*2+2]
+            action = np.array(self.action_space[actions[u]])
+
+            # 拆分動作
+            self.u_action_select = action[0]
+            self.u_action_move = action[1] 
+            self.u_V = self.V[action[1]]
             
-            if(self.done[u_cntt]==0):
-                L_U_ind = self.Update_Trajec(L_U_ind,self.v_n_rnd) # update UAV trajectory
+            if(self.done[u]==0):
+                # 更新UAV位置
+                u_loc = self.Update_Location(u_loc,self.u_V)
                 
-                risk = self.Risk_prob(L_U_ind) # risk probability
-                if(risk == 0):
-                    Pwr_agent = self.Min_Power(self.dev_chosen,L_U_ind) # pwr calculations for agent i
-                    self.Pwr = self.Pwr + Pwr_agent # update total power
-                    self.A_m = self.AoI_Calc(self.dev_chosen,self.A_m) # age calculations
-                else:
-                    self.risk_indicator[u_cntt] = self.risk_indicator[u_cntt] + 1
-                    prob = random.random()
-                    if(prob < risk):
-                        Pwr_agent = self.Min_Power(self.dev_chosen,L_U_ind) # pwr calculations for agent i
-                        self.Pwr = self.Pwr + Pwr_agent + self.penalty
-                        self.A_m = self.AoI_Calc(self.dev_chosen,self.A_m) # age calculations
-                    else:
-                        Pwr_agent = self.Min_Power(self.dev_chosen,L_U_ind) # pwr calculations for agent i
-                        self.Pwr = self.Pwr + Pwr_agent # update total power
-                        self.A_m = self.AoI_Calc(self.dev_chosen,self.A_m) # age calculations
-                    
-                    
-            
-            L_U_new[u_cntt*2:u_cntt*2+2] = L_U_ind # update the trajectory
-        
-        self.Total_reward = self.Reward_Calc(self.A_m,self.Pwr/self.U)
-        
-        
-        for u_cntt in range(self.U):
-            reward[u_cntt] = self.Reward_Calc(self.A_m,self.Pwr)
+                # 計算基本功率
+                u_power = self.Power_Calc(self.u_action_select,u_loc)
 
-        state_new = np.concatenate((np.asarray(L_U_new).reshape(-1), self.A_m), axis=None)
+                # 取得風險機率
+                risk_prob = self.Risk_prob(u_loc)
+                if risk_prob > 0:
+                    self.risk_count[u] = self.risk_count[u] + 1
+
+                    # 取樣以決定是否施加懲罰
+                    sample_prob = random.random()
+                    if sample_prob < risk_prob:
+                        u_power += self.penalty
+                
+                self.power += u_power
+                self.AOI_Reset(self.u_action_select)
+            
+            # 更新狀態
+            U_loc_next[u*2:u*2+2] = u_loc
         
-        if(self.cntt == self.length_episode): # episode length check
+        # 計算整體獎勵與各UAV獎勵
+        self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U)
+        for u in range(self.U):
+            rewards[u] = self.Reward_Calc(self.AOI, self.power)
+
+        # 聚合狀態
+        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
+        
+        # 檢查是否終止
+        if(self.steps == self.max_steps):
             self.done = np.ones(self.U)
-        self.cntt = self.cntt + 1
-        
         if(sum(self.done) == self.U):
             self.DONE = 1
-        else:
-            self.DONE = 0
+
+        self.steps += 1
         
-        
-        return state_new, reward, self.done
+        return states_next, rewards, self.done
     

@@ -1,85 +1,105 @@
 
-import numpy as np
 import pandas as pd
 import torch
-from utils import get_config, eval_runs_dist, prep_dataloader
-import random
+from utils import get_config, eval_runs_dist, prep_dataloader, RNGManager
 from agent_CQR import CQRAgent
-from Environment import environment
+from Environment import Environment
 import matplotlib.pyplot as plt
 
+def personalized_fedavg_shared_layers(agents, beta=0.5):
+    shared_layer_names = [
+        "head_1.weight", "head_1.bias",
+        "ff_1.weight", "ff_1.bias"
+    ]
 
-def Train_MA_CIQR(Model,Dev_Coord,Risky_region,alpha,eta):
+    with torch.no_grad():
+        state_dicts = [agent.network.state_dict() for agent in agents]
+        avg_state = {}
+
+        for key in shared_layer_names:
+            avg_state[key] = sum(sd[key] for sd in state_dicts) / len(state_dicts)
+
+        for agent in agents:
+            local_state = agent.network.state_dict()
+            for key in shared_layer_names:
+                local_state[key] = (1 - beta) * local_state[key] + beta * avg_state[key]
+            agent.network.load_state_dict(local_state)
+
+def Train_MA_CIQR(model, device_coord, risky_region, alpha, eta):
+    # 初始化RNG, 環境與超參數
     config = get_config()
-    np.random.seed(config.seed)
-    random.seed(config.seed)
-    torch.manual_seed(config.seed)
-
-    env = environment(Dev_Coord,Risky_region,config)
+    rng = RNGManager()
+    env = Environment(device_coord, risky_region, config)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    Episode_Reward = []
-    gamma = 0.99
+    # 預處理Dataset
+    df_src = fr"{config.PATH}\Datasets\Dataset_Online_DQN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.csv"
+    dataset = pd.read_csv(df_src)
+    dataloader = prep_dataloader(config.U*2 + config.M, dataset, config.U, batch_size=config.batch_size_offline)
 
-
-    agent = []
-
-    Num_UAVs_str = str(config.U)
-    penalty_str = str(config.penalty)
-    data_size_perc_str = str(config.data_size_perc)
-
-    dataset = pd.read_csv(config.PATH+r'Datasets\Dataset_Online_DQN_'+data_size_perc_str+'%_'+Num_UAVs_str+'UAVs_pen_'+penalty_str+'.csv')
-
-    dataloader = prep_dataloader(config.U*2 + config.M, dataset, config.U, batch_size=config.Batch_offline)
-
+    # 初始化Agent
+    agents = []
     for u in range(config.U):
-        agent_u = CQRAgent(seed=config.seed, state_size=env.observation_space.shape,
-                     action_size=env.action_space.shape[0],
-                     alpha=alpha,
-                     eta=eta,
-                     device=device)
-        agent.append(agent_u)
+        agent = CQRAgent(state_size = env.nObservation,
+                     action_size = env.nAction,
+                     alpha = alpha,
+                     eta = eta,
+                     device = device)
+        agents.append(agent)
 
+    eval_rewards = []
 
-    batches = 0
-
-
-    eval_reward = eval_runs_dist(env, agent)
-
-    for i in range(1, config.epochs+1):
+    for epoch in range(1, config.epochs + 1):
+        # 初始化
         loss = [0] * config.U
-        for batch_idx, experience in enumerate(dataloader):
+
+        # 從dataset進行CQL訓練
+        for _, experience in enumerate(dataloader):
+
+            # 拆分經驗樣本
             states, actions, rewards, next_states, dones = experience
+
             states = states.to(device)
             actions = actions.to(device)
             rewards = rewards.to(device)
             next_states = next_states.to(device)
             dones = dones.to(device)
+
             for u in range(config.U):
-                loss[u] = agent[u].learn_cqr_ind((states, actions[:,[u]], rewards, next_states, dones))
+                loss[u] = agents[u].Learn_CQR_ind((states, actions[:,[u]], rewards, next_states, dones))
 
-        if i % config.eval_every == 0:
-            eval_reward = eval_runs_dist(env, agent)
+        # personalized_fedavg_shared_layers(agents, beta=0.7)
 
-            Episode_Reward.append(eval_reward)
-            print("Epoch: {} | Reward: {} | Q Loss_: {}".format(i, eval_reward, loss,))
-        
+        # for u in range(config.U):
+        #     agents[u].soft_update(agents[u].network, agents[u].target_network)
+
+        # 定時進行測試評估
+        if epoch % config.eval_periods == 0:
+            eval_reward = eval_runs_dist(env, agents, rng)
+            eval_rewards.append(eval_reward)
+
+            print(f"Epoch: {epoch} | Eval_Reward: {eval_reward} | Q Loss: {loss}")
+    
+    # 儲存模型參數
     for u in range(config.U):
-        u_str = str(u)
-        torch.save(agent[u].qnetwork_local.state_dict(), config.PATH+r'Saved_Models\\'+Model+'_offline_'+data_size_perc_str+'%_UAV_'+u_str+'_pen_'+penalty_str+'.pth')
+        model_src = fr"{config.PATH}\Saved_Models\Model_Offline_{model}_{str(config.data_size)}%_UAV_{str(u)}_{str(config.penalty)}pen.pth"
+        torch.save(agents[u].network.state_dict(), model_src)
+
+    # 產生圖表
+    fig_src = fr"{config.PATH}\Results\Result_Offline_{model}_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.png"
+    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Offline_{model}_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen.csv"
+
+    window_size = 10
+    eval_rewards_smooth = pd.Series(eval_rewards).rolling(window=window_size).mean()
 
     plt.figure(figsize=(12, 6))
-    window_size = 10
-    Episode_Reward_smooth = pd.Series(Episode_Reward).rolling(window=window_size).mean()
-    plt.plot(Episode_Reward_smooth, label='Reward')
+    plt.plot(eval_rewards_smooth, label='Reward')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
-    plt.title(f'MA_{Model} Reward')
+    plt.title(f'MA_{model} Reward')
     plt.legend()
     plt.grid(True)
-    plt.savefig(config.PATH+r'Results\\'+Model+'_offline_'+data_size_perc_str+'_pen_'+penalty_str+'.png')
-    pd.DataFrame(Episode_Reward).to_csv(config.PATH+r'Result_Datas\\'+Model+'_offline_'+data_size_perc_str+'_pen_'+penalty_str+'.csv', index=False)
-    # 讀取 CSV 以還原 Episode_Reward
-    # Episode_Reward_loaded = pd.read_csv(config.PATH+r'Results\\'+Model+'_offline_'+data_size_perc_str+'%_UAV_'+u_str+'_pen_'+penalty_str+'_rewards.csv').iloc[:, 0].tolist()
-    
+
+    plt.savefig(fig_src)
+    pd.DataFrame(eval_rewards).to_csv(fig_data_src, index=False)

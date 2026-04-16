@@ -5,15 +5,19 @@ import matplotlib.pyplot as plt
 
 config = get_config()
 
-sub = ['CIQR-CVaR','CCQR-CVaR','CIQR','CCQR','CIQL','CCQL','DIQN','DCQN','QR-DIQN','QR-DCQN']
+# sub = ['CIQR-CVaR','CCQR-CVaR','CIQR','CCQR','CIQL','CCQL','DIQN','DCQN','QR-DIQN','QR-DCQN']
+sub = ['CIQR-CVaR','CCQR-CVaR','CIQR','CCQR','CIQL','CCQL']
+# setting = [("#01A8A8",'-','o'),('#01A8A8',':','o'),
+#            ('blue','-','x'),('blue',':','x'),
+#            ('red','-','>'),('red',':','>'),
+#            ('black','-','P'),('black',':','P'),
+#            ('green','-','.'),('green',':','.')]
 setting = [("#01A8A8",'-','o'),('#01A8A8',':','o'),
            ('blue','-','x'),('blue',':','x'),
-           ('red','-','>'),('red',':','>'),
-           ('black','-','P'),('black',':','P'),
-           ('green','-','.'),('green',':','.')]
+           ('red','-','>'),('red',':','>')]
 result = []
 for i in sub:
-    r = (pd.read_csv(config.PATH+f'Result_Datas\{i}_offline_16_pen_300.csv').iloc[:, 0] / 1000).tolist()
+    r = (pd.read_csv(config.PATH+fr'\Result_Datas\16%_2UAVs_300pen_seed1\Result_Offline_{i}_16%_2UAVs_300pen.csv').iloc[:, 0] / 1000).tolist()
     result.append(r)
 
 plt.figure(figsize=(8, 6))
@@ -31,7 +35,7 @@ plt.legend(loc='lower center',
            bbox_to_anchor=(0.5, 1.02),
            ncol=2)
 plt.grid(True)
-plt.savefig(config.PATH+r'Results\\Total_test_reward.png', bbox_inches='tight')
+plt.savefig(config.PATH+r'\Results\\Total_test_rewardW.png', bbox_inches='tight')
 
 
 
