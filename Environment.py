@@ -3,23 +3,37 @@ import random
 import itertools
 import math
 
-def generate_unique_coords(N):
-    """
-    生成 N 個不重複的整數座標，範圍在 [0,0] ~ [9,9]
-    
-    回傳：
-        np.array shape = (N, 2)
-    """
-    assert 0 <= N <= 100, "N 不能超過 100（因為總共只有 10x10 個點）"
-    
-    # 建立所有可能座標 (100 個)
-    all_coords = np.array([(x, y) for x in range(10) for y in range(10)])
-    
-    # 隨機選 N 個（不重複）
-    indices = np.random.choice(len(all_coords), size=N, replace=False)
-    
-    return all_coords[indices]
+def generate_unique_coords(N, min_dist = 0.0, L_corner = (0.0, 0.0), H_corner = (10.0, 10.0), max_attempts=100000):
+    assert N >= 0, f"Violate (N >= 0), {N}"
+    assert min_dist >= 0, f"Violate (min_dist >= 0), {min_dist}"
 
+    L = np.array(L_corner, dtype=np.float32)
+    H = np.array(H_corner, dtype=np.float32)
+
+    assert L.shape == (2,), f"Violate (L.shape == (2,)), {L.shape}"
+    assert H.shape == (2,), f"Violate (H.shape == (2,)), {H.shape}"
+    assert np.all(L < H), f"Violate (np.all(L < H)), {L}, {H}"
+
+    coords = []
+    attempts = 0 # 總嘗試次數
+
+    while len(coords) < N and attempts < max_attempts:
+        attempts += 1
+
+        candidate = np.random.uniform(low=L, high=H, size=2)
+
+        if len(coords) == 0:
+            coords.append(candidate)
+            continue
+
+        distances = np.linalg.norm(np.array(coords) - candidate, axis=1)
+
+        if np.all(distances >= min_dist):
+            coords.append(candidate)
+
+    assert len(coords) == N, f"Violate (len(coords) == N), {len(coords)}"
+    
+    return np.array(coords)
 
 class Environment():
     CHANNEL_GAIN = 10**(-30/10) # 通道增益(-30 dB)
@@ -28,14 +42,6 @@ class Environment():
     B = 1e6 # 頻寬
     PACKET_SIZE = 5e6 # 封包大小
     SIGMA = (10 ** (-100/10)) * (10e-3) # 雜訊功率 (-100 dBm)
-
-    steps_mov = 2 # 每個時間步的最大位移(論文中steps_mov = 1)
-    
-    V = np.matrix([[0, 0], # 移動向量(Idle, E, W, N, S)
-                   [steps_mov,0],
-                   [-steps_mov,0],
-                   [0,steps_mov],
-                   [0,-steps_mov]])
     
     max_steps = 100 # 最大步數，到達該步數後終止環境
     
@@ -52,24 +58,38 @@ class Environment():
         
         self.AOI_max = 100 # 最大AOI限制
 
-        action_select = list(range(0,self.M+1)) # 不選擇/選擇一個Device
-        action_move = list(range(0,5)) # 移動動作(Idle, E, W, N, S)
-        self.action_space = list(itertools.product(action_select, action_move)) # 動作組合(笛卡兒積)
+        self.MAX_MOV = 2 # 每個時間步的最大位移(論文中steps_mov = 1)
 
-        self.nAction = len(self.action_space)
+        # 地圖範圍
+        self.L_map = np.array([0.0, 0.0], dtype=np.float32)
+        self.H_map = np.array([10.0, 10.0], dtype=np.float32)
+
+        self.nAction_move = 2
+        self.nAction_select = self.M + 1
         self.nObservation = self.U * 2 + self.M
         
     # 重置環境
     def reset(self):        
 
-        self.device_coord = generate_unique_coords(10)
+        self.device_coord = generate_unique_coords(N = self.M)
 
         # 初始化UAV位置
         self.UAVs_init_coord = np.array([])
+
         for _ in range(self.U):
-            UAV_coord = np.random.randint(self.nCell, size=2) # 隨機初始化UAV位置
-            while(any(np.array_equal(r, UAV_coord) for r in self.risky_region)): # 如果存在UAV位於風險區域則重抽
-                UAV_coord = np.random.randint(self.nCell, size=2) 
+            UAV_coord = np.random.uniform(
+                low=self.L_map,
+                high=self.H_map,
+                size=2
+            ).astype(np.float32)
+
+            while self.is_coord_risky(UAV_coord):
+                UAV_coord = np.random.uniform(
+                    low=self.L_map,
+                    high=self.H_map,
+                    size=2
+                ).astype(np.float32)
+
             self.UAVs_init_coord = np.append(self.UAVs_init_coord, UAV_coord)
         
         self.AOI = np.ones(self.M) # 初始化AoI
@@ -88,15 +108,28 @@ class Environment():
         if device < self.M:
             self.AOI[device] = 1
 
+    def is_coord_risky(self, coord):
+        x, y = coord
+
+        for region in self.risky_region:
+            xmin, ymin, xmax, ymax = region
+
+            if xmin <= x <= xmax and ymin <= y <= ymax:
+                return True
+
+        return False
+
     # 更新UAV的位置
     def Update_Location(self, U_loc, V_selected):
         U_loc = U_loc + V_selected
 
         # 檢查(x,y)是否超過邊界
-        for i in [0,1]:
-            U_loc[0,i] = max(0, U_loc[0,i])
-            U_loc[0,i] = min(self.nCell - 1, U_loc[0,i])
-        
+        U_loc = np.clip(
+            U_loc,
+            self.L_map,
+            self.H_map
+        )
+
         U_loc = np.asarray(U_loc).reshape(-1)
         return U_loc
         
@@ -117,11 +150,12 @@ class Environment():
     
     # 風險機率  
     def Risk_prob(self, U_loc):
-        if(any(np.array_equal(r, U_loc) for r in self.risky_region)):
-            risk = self.prob_of_risk
+        x, y = U_loc
+
+        if self.is_coord_risky(U_loc):
+            return self.prob_of_risk
         else:
-            risk = 0
-        return risk
+            return 0
     
     # 執行環境
     def step(self, states, actions):
@@ -140,17 +174,16 @@ class Environment():
         for u in range(self.U):
 
             # 取得UAV當前位置與動作
-            u_loc = self.U_loc[u*2:u*2+2]
-            action = np.array(self.action_space[actions[u]])
+            u_loc = self.U_loc[u*2 : u*2+2]
+            action = actions[u]
 
             # 拆分動作
             self.u_action_select = action[0]
-            self.u_action_move = action[1] 
-            self.u_V = self.V[action[1]]
+            self.u_action_move = action[1]
             
             if(self.done[u]==0):
                 # 更新UAV位置
-                u_loc = self.Update_Location(u_loc,self.u_V)
+                u_loc = self.Update_Location(u_loc,self.u_action_move)
                 
                 # 計算基本功率
                 u_power = self.Power_Calc(self.u_action_select,u_loc)
@@ -169,7 +202,7 @@ class Environment():
                 self.AOI_Reset(self.u_action_select)
             
             # 更新狀態
-            U_loc_next[u*2:u*2+2] = u_loc
+            U_loc_next[u*2 : u*2+2] = u_loc
         
         # 計算整體獎勵與各UAV獎勵
         self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U)

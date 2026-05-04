@@ -53,29 +53,15 @@ device_coord = np.array([[3,1],[7,2],[6,7],[1,6],[7,5],[8,5],[9,1],[6,1],[4,7],[
 
 
 # 危險區域(5*4)
-risky_region = np.array([[3,2],[3,3],[3,4],[3,5],[3,6],
-                         [4,2],[4,3],[4,4],[4,5],[4,6],
-                         [5,2],[5,3],[5,4],[5,5],[5,6],
-                         [6,2],[6,3],[6,4],[6,5],[6,6]])
-
-def generate_unique_coords(N):
-    """
-    生成 N 個不重複的整數座標，範圍在 [0,0] ~ [9,9]
-    
-    回傳：
-        np.array shape = (N, 2)
-    """
-    assert 0 <= N <= 100, "N 不能超過 100（因為總共只有 10x10 個點）"
-    
-    # 建立所有可能座標 (100 個)
-    all_coords = np.array([(x, y) for x in range(10) for y in range(10)])
-    
-    # 隨機選 N 個（不重複）
-    indices = np.random.choice(len(all_coords), size=N, replace=False)
-    
-    return all_coords[indices]
+# risky_region = np.array([[3,2],[3,3],[3,4],[3,5],[3,6],
+#                          [4,2],[4,3],[4,4],[4,5],[4,6],
+#                          [5,2],[5,3],[5,4],[5,5],[5,6],
+#                          [6,2],[6,3],[6,4],[6,5],[6,6]])
 
 
+risky_region = [
+    [3.0, 2.0, 6.0, 6.0],
+]
 
 model = "CIQR-CVaR"
 
@@ -83,9 +69,6 @@ if __name__ == "__main__":
     # Wall-time計時
     torch.cuda.synchronize()
     start_time = time.perf_counter()
-
-    # np.random.seed(10)
-    # device_coord = generate_unique_coords(10)
 
     train(model, device_coord, risky_region)
 
