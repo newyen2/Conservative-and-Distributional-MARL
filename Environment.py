@@ -45,7 +45,7 @@ class Environment():
     
     max_steps = 100 # 最大步數，到達該步數後終止環境
     
-    def __init__(self, device_coord, risky_region,config):
+    def __init__(self, device_coord, risky_region, config):
         self.device_coord = device_coord
         self.risky_region = risky_region
 
