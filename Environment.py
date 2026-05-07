@@ -58,8 +58,6 @@ class Environment():
         
         self.AOI_max = 100 # 最大AOI限制
 
-        self.MAX_MOV = 2 # 每個時間步的最大位移(論文中steps_mov = 1)
-
         # 地圖範圍
         self.L_map = np.array([0.0, 0.0], dtype=np.float32)
         self.H_map = np.array([10.0, 10.0], dtype=np.float32)

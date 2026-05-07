@@ -1,48 +1,50 @@
 import numpy as np
 import time
 import torch
-from DQN_Online import Train_DQN_Online
-from MA_CIQL import Train_MA_CIQL
-from MA_CCQL import Train_MA_CCQL
-from MA_CIQR import Train_MA_CIQR
-from MA_CCQR import Train_MA_CCQR
+from SAC_Online import Train_SAC_Online
+# from MA_CIQL import Train_MA_CIQL
+# from MA_CCQL import Train_MA_CCQL
+# from MA_CIQR import Train_MA_CIQR
+# from MA_CCQR import Train_MA_CCQR
 
 
 # 選擇訓練模型
 def train(model, device_coord, risky_region):    
-    # 由Online DQN生成離線資料集
-    if (model=="DQN_Online"):
-        Train_DQN_Online(device_coord, risky_region)
+    # 由Online SAC生成離線資料集
+    if (model=="SAC"):
+        Train_SAC_Online(device_coord, risky_region)
+    # if (model=="DQN_Online"):
+    #     Train_DQN_Online(device_coord, risky_region)
 
-    # DQN + CQL
-    if(model=="CIQL"):
-        Train_MA_CIQL(model, device_coord, risky_region, alpha = 1)
-    elif(model=="CCQL"):
-        Train_MA_CCQL(model, device_coord, risky_region, alpha = 1)
+    # # DQN + CQL
+    # if(model=="CIQL"):
+    #     Train_MA_CIQL(model, device_coord, risky_region, alpha = 1)
+    # elif(model=="CCQL"):
+    #     Train_MA_CCQL(model, device_coord, risky_region, alpha = 1)
 
-    # DQN 
-    elif(model=="DIQN"):
-        Train_MA_CIQL(model, device_coord, risky_region, alpha = 0)
-    elif(model=="DCQN"):
-        Train_MA_CCQL(model, device_coord, risky_region, alpha = 0)
+    # # DQN 
+    # elif(model=="DIQN"):
+    #     Train_MA_CIQL(model, device_coord, risky_region, alpha = 0)
+    # elif(model=="DCQN"):
+    #     Train_MA_CCQL(model, device_coord, risky_region, alpha = 0)
 
-    # QR-DQN + CQL
-    elif(model=="CIQR"):
-        Train_MA_CIQR(model, device_coord, risky_region, alpha = 1, eta = 1)
-    elif(model=="CCQR"):
-        Train_MA_CCQR(model, device_coord, risky_region, alpha = 1, eta = 1)
+    # # QR-DQN + CQL
+    # elif(model=="CIQR"):
+    #     Train_MA_CIQR(model, device_coord, risky_region, alpha = 1, eta = 1)
+    # elif(model=="CCQR"):
+    #     Train_MA_CCQR(model, device_coord, risky_region, alpha = 1, eta = 1)
 
-    # QR-DQN
-    elif(model=="QR-DIQN"):
-        Train_MA_CIQR(model, device_coord, risky_region, alpha = 0, eta = 1)
-    elif(model=="QR-DCQN"):
-        Train_MA_CCQR(model, device_coord, risky_region, alpha = 0, eta = 1)
+    # # QR-DQN
+    # elif(model=="QR-DIQN"):
+    #     Train_MA_CIQR(model, device_coord, risky_region, alpha = 0, eta = 1)
+    # elif(model=="QR-DCQN"):
+    #     Train_MA_CCQR(model, device_coord, risky_region, alpha = 0, eta = 1)
 
-    # QR-DQN + CQL + CVaR
-    elif(model=="CIQR-CVaR"):
-        Train_MA_CIQR(model, device_coord, risky_region, alpha = 1, eta = 0.15)
-    elif(model=="CCQR-CVaR"):
-        Train_MA_CCQR(model, device_coord, risky_region, alpha = 1, eta = 0.15)
+    # # QR-DQN + CQL + CVaR
+    # elif(model=="CIQR-CVaR"):
+    #     Train_MA_CIQR(model, device_coord, risky_region, alpha = 1, eta = 0.15)
+    # elif(model=="CCQR-CVaR"):
+    #     Train_MA_CCQR(model, device_coord, risky_region, alpha = 1, eta = 0.15)
 
 
 # 裝置座標
@@ -63,7 +65,7 @@ risky_region = [
     [3.0, 2.0, 6.0, 6.0],
 ]
 
-model = "CIQR-CVaR"
+model = "SAC"
 
 if __name__ == "__main__":    
     # Wall-time計時

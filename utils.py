@@ -8,17 +8,28 @@ from torch.nn.utils import clip_grad_norm_
 
 # 從動作集隨機採樣，重複500次並儲存至資料集
 def collect_random(env, U, dataset, steps = 500):
+    config = get_config()
     state = env.reset()
     for _ in range(steps):
 
-        # 從所有動作可能(移動*服務設備)中，採樣與Agent數量相同的不重複動作
-        actions = random.sample(range(0, 5 * (env.M + 1)), U)
+        actions = []
+
+        for _ in range(U):
+            select_action = random.randrange(env.nAction_select)
+            move_action = np.random.uniform(
+                low=-config.max_mov,
+                high=config.max_mov,
+                size=env.nAction_move
+            ).astype(np.float32)
+
+            actions.append([select_action, move_action])
 
         next_state, reward, done = env.step(state, actions)
         
         for u in range(U):
-            dataset[u].add(state, actions[u], reward[u], next_state, done[u])
-            
+            action_vec = np.concatenate(([actions[u][0]], actions[u][1]), axis=None).astype(np.float32)
+            dataset[u].add(state, action_vec, reward[u], next_state, done[u])
+
         state = next_state
 
         if env.DONE:
@@ -43,7 +54,9 @@ def get_config():
     parser.add_argument("--energy_weight", type=int, default=500) # 獎勵函數的能源權重,在論文內使用的是lambda, default: 500
     parser.add_argument("--penalty", type=int, default=300) # 風險產生的懲罰值, default: 300
     parser.add_argument("--data_size", type=int, default=16) # 從離線資料集用於訓練的資料比例, default: 16
-    parser.add_argument("--prob_of_risk", type=int, default=0.1) # 具有風險時的懲罰機率, default: 0.1
+    parser.add_argument("--prob_of_risk", type=float, default=0.1) # 具有風險時的懲罰機率, default: 0.1
+    parser.add_argument("--max_mov", type=float, default=2) # 每個時間步的最大位移(論文中steps_mov = 1)
+
     parser.add_argument("--PATH", type=str, default=r"C:\Users\wish1\Desktop\Conservative-and-Distributional-MARL-main") # 存檔路徑
     
     return parser.parse_args(args=[])
@@ -53,6 +66,7 @@ def eval_runs(env, agent, rng, eval_runs=10):
     rng.switch_mode("eval")
     
     rewards = []
+
     for _ in range(eval_runs):
         state = env.reset()
         episode_reward = 0
@@ -60,34 +74,9 @@ def eval_runs(env, agent, rng, eval_runs=10):
 
         while not env.DONE:
             for u in range(env.U):
-                action[u] = agent[u].get_action(state, epsilon = 0)[0]
+                action[u] = agent[u].get_action(state, deterministic=True)
                 
-            next_state, _, _ = env.step(state,action)
-            
-            episode_reward += env.total_reward
-            state = next_state
-
-        rewards.append(episode_reward)
-
-    rng.switch_mode("train")
-    return np.mean(rewards)
-
-# 模擬10次的執行並取得獎勵
-# 分佈版本，以解決get_action回傳結構不同
-def eval_runs_dist(env, agent, rng, eval_runs=10):
-    rng.switch_mode("eval")
-    
-    rewards = []
-    for _ in range(eval_runs):
-        state = env.reset()
-        episode_reward = 0
-        action = [0] * env.U
-
-        while not env.DONE:
-            for u in range(env.U):
-                action[u] = agent[u].get_action(state, epsilon = 0)
-                
-            next_state, _, _ = env.step(state,action)
+            next_state, _, _ = env.step(state, action)
             
             episode_reward += env.total_reward
             state = next_state
@@ -98,19 +87,21 @@ def eval_runs_dist(env, agent, rng, eval_runs=10):
     return np.mean(rewards)
 
 # 預處理dataset，並轉換成(s, a, r, s′, done)的形式，再轉成DataLoader
-def prep_dataloader(state_dim, dataset, num_UAVs, batch_size=256):
-    
+def prep_dataloader(state_dim, dataset, num_UAVs, batch_size=256, continuous_action_size = 2):
+    action_dim_per_uav = 1 + continuous_action_size
+    total_action_dim = num_UAVs * action_dim_per_uav
+
     # 拆分dataset
     states_df = dataset.iloc[:, 1 : state_dim + 1]
-    actions_df = dataset.iloc[:, state_dim + 1 : state_dim + num_UAVs + 1]
-    rewards_df = dataset.iloc[:,  state_dim + num_UAVs + 1]
-    next_states_df = dataset.iloc[:, state_dim + num_UAVs + 2 : state_dim + num_UAVs + state_dim + 2]
-    done_df = dataset.iloc[:, state_dim + num_UAVs + state_dim + 2]
+    actions_df = dataset.iloc[:, state_dim + 1 : state_dim + total_action_dim + 1]
+    rewards_df = dataset.iloc[:, state_dim + total_action_dim + 1]
+    next_states_df = dataset.iloc[:, state_dim + total_action_dim + 2 : state_dim + total_action_dim + state_dim + 2]
+    done_df = dataset.iloc[:, state_dim + total_action_dim + state_dim + 2]
 
     # 轉換為tensor
     tensors = {}
     tensors["observations"] = torch.tensor(states_df.values,dtype=torch.float)
-    tensors["actions"] = torch.tensor(actions_df.values,dtype=torch.long)
+    tensors["actions"] = torch.tensor(actions_df.values,dtype=torch.float)
     tensors["rewards"] = torch.tensor(rewards_df.values,dtype=torch.float).unsqueeze(1)
     tensors["next_observations"] = torch.tensor(next_states_df.values,dtype=torch.float)
     tensors["terminals"] = torch.tensor(done_df.values,dtype=torch.float).unsqueeze(1)
