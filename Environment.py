@@ -64,7 +64,7 @@ class Environment():
 
         self.nAction_move = 2
         self.nAction_select = self.M + 1
-        self.nObservation = self.U * 2 + self.M
+        self.nObservation = self.U * 2 + self.M * 3
         
     # 重置環境
     def reset(self):        
@@ -99,7 +99,7 @@ class Environment():
 
         self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
             
-        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
+        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
     
     # 重置AOI
     def AOI_Reset(self, device):
@@ -208,7 +208,7 @@ class Environment():
             rewards[u] = self.Reward_Calc(self.AOI, self.power)
 
         # 聚合狀態
-        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
+        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
         
         # 檢查是否終止
         if(self.steps == self.max_steps):
@@ -219,4 +219,3 @@ class Environment():
         self.steps += 1
         
         return states_next, rewards, self.done
-    

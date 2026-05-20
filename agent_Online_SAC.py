@@ -24,6 +24,9 @@ class SACAgent():
         # Entropy
         self.alpha = 0.2
 
+        # Learning Rate
+        self.lr = 1e-4
+
         # log_std clamp 範圍
         self.log_std_min = -20
         self.log_std_max = 2
@@ -59,9 +62,9 @@ class SACAgent():
         self.target_critic_network_2.load_state_dict(self.critic_network_2.state_dict())
 
         # Optimizers
-        self.actor_optimizer = optim.Adam(self.actor_network.parameters(), lr=1e-4)
-        self.critic_1_optimizer = optim.Adam(self.critic_network_1.parameters(), lr=1e-4)
-        self.critic_2_optimizer = optim.Adam(self.critic_network_2.parameters(), lr=1e-4)
+        self.actor_optimizer = optim.Adam(self.actor_network.parameters(), lr=self.lr)
+        self.critic_1_optimizer = optim.Adam(self.critic_network_1.parameters(), lr=self.lr)
+        self.critic_2_optimizer = optim.Adam(self.critic_network_2.parameters(), lr=self.lr)
 
     def sample_policy(self, states, deterministic=False):
         continuous_mu, continuous_log_std, discrete_logits = self.actor_network(states)
@@ -227,3 +230,14 @@ class SACAgent():
     def soft_update(self, local_model, target_model):
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
+
+    def get_parameter(self):
+        return {
+            "model": "agent_Online_SAC",
+            "tau": self.tau,
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "lr": self.lr,
+            "log_std_min": self.log_std_min,
+            "log_std_max": self.log_std_max
+        }

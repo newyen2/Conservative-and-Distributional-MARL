@@ -6,14 +6,22 @@ from utils import collect_random, get_config, eval_runs, RNGManager
 from agent_Online_SAC import SACAgent
 from Environment import Environment
 import matplotlib.pyplot as plt
+from datetime import datetime
+import time
+from tqdm import tqdm
+import sys
 
 def Train_SAC_Online(device_coord,Risky_region):
-# 初始化RNG, 環境與超參數
+    torch.cuda.synchronize()
+    start_time = time.perf_counter()
+
+    # 初始化RNG, 環境與超參數
     config = get_config()
     rng = RNGManager()
     env = Environment(device_coord,Risky_region,config)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
 
     steps = 0
 
@@ -39,23 +47,62 @@ def Train_SAC_Online(device_coord,Risky_region):
         buffers.append(buffer)
 
     # 透過隨機採取動作，於環境進行500步後，作為每個Agent的Replay Buffer
-    collect_random(env=env, U=config.U, dataset=buffers, steps=500)
+    collect_steps = 500
+    collect_random(env=env, U=config.U, dataset=buffers, steps=collect_steps)
+
+    df = []
 
     # 試算表
-    df = []
+    episode_df = {}
+    episode_df['episode'] = []
+    episode_df['init_UAV_pos'] = []
+    episode_df['init_device_pos'] = []
+    episode_df['risk_region'] = []
+
+    step_df = {}
+    step_df['episode'] = []
+    step_df['step'] = []
+    step_df['UAV_pos'] = []
+    step_df['device_pos'] = []
+    step_df['device_AOI'] = []
+    step_df['UAV_action_select'] = []
+    step_df['UAV_action_move'] = []
+    step_df['reward'] = []
 
     # 評估獎勵
     eval_rewards = [] 
 
+    pbar_episode = tqdm(
+        range(1, config.episodes + 1),
+        desc="Episode",
+        position=0,
+        leave=True,
+        dynamic_ncols=True,
+        file=sys.stdout
+    )
 
-    for episode in range(1, config.episodes + 1):
+    for episode in pbar_episode:
         # 初始化
         states = env.reset()
         actions = [0] * config.U
         episode_reward = 0.0 # 本次Episode的全局獎勵
         agent_rewards = np.zeros(config.U) # 個別Agent的獎勵
 
-        while True:
+        episode_df['episode'].append(episode)
+        episode_df['init_UAV_pos'].append(env.UAVs_init_coord)
+        episode_df['init_device_pos'].append(env.device_coord.tolist())
+        episode_df['risk_region'].append(env.risky_region)
+
+        pbar_step = tqdm(
+            range(100),
+            desc="Step",
+            position=1,
+            leave=False,
+            dynamic_ncols=True,
+            file=sys.stdout
+        )
+
+        for _ in pbar_step:
             # 個別UAV取得動作並執行
             for u in range(config.U):
                 actions[u] = agents[u].get_action(states)
@@ -104,21 +151,34 @@ def Train_SAC_Online(device_coord,Risky_region):
             steps += 1
             states = next_states.copy()
 
+            step_df['episode'].append(episode)
+            step_df['step'].append(steps)
+            step_df['UAV_pos'].append(states.copy()[:4])
+            step_df['device_AOI'].append(states.copy()[4:14])
+            step_df['device_pos'].append(env.device_coord.tolist())
+            step_df['UAV_action_select'].append([i[0] for i in actions])
+            step_df['UAV_action_move'].append([i[1].tolist() for i in actions])
+            step_df['reward'].append(rewards)
+
             if env.DONE:
                 break
 
-        print(f"Episode: {episode} | Reward: {episode_reward} | Reward_u{agent_rewards} | Steps: {steps}")
+        tqdm.write(f"Episode: {episode} | Reward: {episode_reward} | Reward_u{agent_rewards} | Steps: {steps}")
 
         # 定時進行測試評估
         if episode % config.eval_periods == 0:
             eval_reward = eval_runs(env, agents, rng)
             eval_rewards.append(eval_reward)
 
-            print(f"Eval_Reward: {eval_reward}")
-    
+            tqdm.write(f"Eval_Reward: {eval_reward}")
 
-    # 產生CSV
-    df_src = fr"{config.PATH}\Datasets\Dataset_Online_SAC_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
+    torch.cuda.synchronize()
+    end_time = time.perf_counter()
+
+    print(f"Total training wall time: {end_time - start_time:.2f} seconds")
+
+    # # 產生CSV
+    df_src = fr"{config.PATH}\Datasets\Dataset_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
     
     save_start = int((config.episodes * env.max_steps)/2)
     save_end = int(save_start + config.data_size * (config.episodes * env.max_steps)/100)
@@ -127,9 +187,9 @@ def Train_SAC_Online(device_coord,Risky_region):
     
     df.to_csv(df_src)
     
-    # 產生圖表
-    fig_src = fr"{config.PATH}\Results\Result_Online_SAC_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.png"
-    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Online_SAC_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
+    # # 產生圖表
+    fig_src = fr"{config.PATH}\Results\Result_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.png"
+    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
 
     window_size = 10
     eval_rewards_smooth = pd.Series(eval_rewards).rolling(window=window_size).mean()
@@ -144,3 +204,30 @@ def Train_SAC_Online(device_coord,Risky_region):
 
     plt.savefig(fig_src)
     pd.DataFrame(eval_rewards).to_csv(fig_data_src, index=False)
+
+    # 產生超參數資訊
+    config_src = fr"{config.PATH}\SAC_Online_config.json"
+
+    configs = {}
+    configs['general'] = vars(config)
+    configs['agent'] = agents[0].get_parameter()
+    configs['train'] = {
+        'collect_steps': collect_steps,
+        'df_src': df_src,
+        'fig_src': fig_src,
+        'fig_data_src': fig_data_src,
+    }
+    configs['info'] = {
+        'date': datetime.now().strftime(r"%Y-%m-%d %H:%M:%S"),
+        'wall_time_second': round(end_time - start_time, 2)
+    }
+
+    pd.Series(configs).to_json(config_src, orient="index", indent=4)
+
+    episode_df = pd.DataFrame(episode_df)
+    episode_src = fr"{config.PATH}\episode2.parquet"
+    episode_df.to_parquet(episode_src, engine="pyarrow")
+
+    step_df = pd.DataFrame(step_df)
+    step_src = fr"{config.PATH}\step2.parquet"
+    step_df.to_parquet(step_src, engine="pyarrow")
