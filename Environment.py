@@ -64,7 +64,7 @@ class Environment():
 
         self.nAction_move = 2
         self.nAction_select = self.M + 1
-        self.nObservation = self.U * 2 + self.M * 3
+        self.nObservation = self.U * 2 + self.M
         
     # 重置環境
     def reset(self):        
@@ -99,7 +99,7 @@ class Environment():
 
         self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
             
-        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
+        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
     
     # 重置AOI
     def AOI_Reset(self, device):
@@ -143,7 +143,7 @@ class Environment():
     # 獎勵計算
     def Reward_Calc(self, AOI, power):
         reward = 0
-        reward = reward - power - (np.sum(AOI)/self.M)
+        reward = reward - power - np.sum(AOI)/self.M
         return reward
     
     # 風險機率  
@@ -186,6 +186,8 @@ class Environment():
                 # 計算基本功率
                 u_power = self.Power_Calc(self.u_action_select,u_loc)
 
+                rewards[u] = self.Reward_Calc(self.AOI, u_power)
+
                 # 取得風險機率
                 risk_prob = self.Risk_prob(u_loc)
                 if risk_prob > 0:
@@ -204,11 +206,9 @@ class Environment():
         
         # 計算整體獎勵與各UAV獎勵
         self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U)
-        for u in range(self.U):
-            rewards[u] = self.Reward_Calc(self.AOI, self.power)
 
         # 聚合狀態
-        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
+        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
         
         # 檢查是否終止
         if(self.steps == self.max_steps):
