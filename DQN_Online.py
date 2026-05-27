@@ -4,8 +4,8 @@ import pandas as pd
 import torch
 from buffer import ReplayBuffer
 from utils import collect_random, get_config, eval_runs, RNGManager
-from agent_Online_DQN import DQNAgent
-from Environment import Environment
+from Code.agent_Online_DQN import DQNAgent
+from Environment_OLD import Environment
 import matplotlib.pyplot as plt
 
 def Train_DQN_Online(device_coord,Risky_region):

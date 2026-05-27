@@ -1,9 +1,9 @@
 import numpy as np
 import random
+import itertools
 import math
 
-
-def generate_unique_coords(N, min_dist=0.0, L_corner=(0.0, 0.0), H_corner=(10.0, 10.0), max_attempts=100000):
+def generate_unique_coords(N, min_dist = 0.0, L_corner = (0.0, 0.0), H_corner = (10.0, 10.0), max_attempts=100000):
     assert N >= 0, f"Violate (N >= 0), {N}"
     assert min_dist >= 0, f"Violate (min_dist >= 0), {min_dist}"
 
@@ -15,10 +15,11 @@ def generate_unique_coords(N, min_dist=0.0, L_corner=(0.0, 0.0), H_corner=(10.0,
     assert np.all(L < H), f"Violate (np.all(L < H)), {L}, {H}"
 
     coords = []
-    attempts = 0
+    attempts = 0 # 總嘗試次數
 
     while len(coords) < N and attempts < max_attempts:
         attempts += 1
+
         candidate = np.random.uniform(low=L, high=H, size=2)
 
         if len(coords) == 0:
@@ -26,37 +27,24 @@ def generate_unique_coords(N, min_dist=0.0, L_corner=(0.0, 0.0), H_corner=(10.0,
             continue
 
         distances = np.linalg.norm(np.array(coords) - candidate, axis=1)
+
         if np.all(distances >= min_dist):
             coords.append(candidate)
 
     assert len(coords) == N, f"Violate (len(coords) == N), {len(coords)}"
+    
     return np.array(coords)
 
-
 class Environment():
-    """
-    Environment for the first Online Hybrid DSAC-T test.
-
-    Observation intentionally keeps the original no-device-position layout:
-        state = [UAV positions, device AOI]
-
-    Action of each UAV:
-        action = [selected_device, continuous_movement_vector]
-
-    This file is kept close to your original Environment.py so that the first
-    DSAC-T test isolates the effect of changing the critic from scalar Q to
-    distributional Q.
-    """
-
-    CHANNEL_GAIN = 10 ** (-30 / 10)  # channel gain (-30 dB)
-    H = 100                          # UAV height
-    CELL_DISTANCE = 100              # cell distance
-    B = 1e6                          # bandwidth
-    PACKET_SIZE = 5e6                # packet size
-    SIGMA = (10 ** (-100 / 10)) * (10e-3)  # noise power (-100 dBm)
-
-    max_steps = 100
-
+    CHANNEL_GAIN = 10**(-30/10) # 通道增益(-30 dB)
+    H = 100 # UAV高度
+    CELL_DISTANCE = 100 # 單元格之間的距離
+    B = 1e6 # 頻寬
+    PACKET_SIZE = 5e6 # 封包大小
+    SIGMA = (10 ** (-100/10)) * (10e-3) # 雜訊功率 (-100 dBm)
+    
+    max_steps = 100 # 最大步數，到達該步數後終止環境
+    
     def __init__(self, device_coord, risky_region, config):
         self.device_coord = device_coord
         self.risky_region = risky_region
@@ -67,125 +55,167 @@ class Environment():
         self.energy_weight = config.energy_weight
         self.penalty = config.penalty
         self.prob_of_risk = config.prob_of_risk
+        
+        self.AOI_max = 100 # 最大AOI限制
 
-        self.AOI_max = 100
-
+        # 地圖範圍
         self.L_map = np.array([0.0, 0.0], dtype=np.float32)
         self.H_map = np.array([10.0, 10.0], dtype=np.float32)
 
-        # Hybrid action space:
-        # continuous movement vector has dimension 2
-        # selected device has M + 1 choices; M means no service
         self.nAction_move = 2
         self.nAction_select = self.M + 1
-
-        # No device position in observation for this first DSAC-T test.
         self.nObservation = self.U * 2 + self.M
+        
+    # 重置環境
+    def reset(self):        
 
-    def reset(self):
-        self.device_coord = generate_unique_coords(N=self.M)
+        self.device_coord = generate_unique_coords(N = self.M)
 
+        # 初始化UAV位置
         self.UAVs_init_coord = np.array([])
-        for _ in range(self.U):
-            UAV_coord = np.random.uniform(low=self.L_map, high=self.H_map, size=2).astype(np.float32)
-            while self.is_coord_risky(UAV_coord):
-                UAV_coord = np.random.uniform(low=self.L_map, high=self.H_map, size=2).astype(np.float32)
-            self.UAVs_init_coord = np.append(self.UAVs_init_coord, UAV_coord)
 
-        self.AOI = np.ones(self.M)
+        for _ in range(self.U):
+            UAV_coord = np.random.uniform(
+                low=self.L_map,
+                high=self.H_map,
+                size=2
+            ).astype(np.float32)
+
+            while self.is_coord_risky(UAV_coord):
+                UAV_coord = np.random.uniform(
+                    low=self.L_map,
+                    high=self.H_map,
+                    size=2
+                ).astype(np.float32)
+
+            self.UAVs_init_coord = np.append(self.UAVs_init_coord, UAV_coord)
+        
+        self.AOI = np.ones(self.M) # 初始化AoI
+
         self.steps = 1
 
-        self.done = np.zeros(self.U)
-        self.DONE = 0
-        self.risk_count = np.zeros(self.U)
+        self.done = np.zeros(self.U) # 個別UAV是否已完成
+        self.DONE = 0 # 整體環境是否終止
 
+        self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
+            
         return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
-
+    
+    # 重置AOI
     def AOI_Reset(self, device):
         if device < self.M:
             self.AOI[device] = 1
 
     def is_coord_risky(self, coord):
         x, y = coord
+
         for region in self.risky_region:
             xmin, ymin, xmax, ymax = region
+
             if xmin <= x <= xmax and ymin <= y <= ymax:
                 return True
+
         return False
 
+    # 更新UAV的位置
     def Update_Location(self, U_loc, V_selected):
         U_loc = U_loc + V_selected
-        U_loc = np.clip(U_loc, self.L_map, self.H_map)
+
+        # 檢查(x,y)是否超過邊界
+        U_loc = np.clip(
+            U_loc,
+            self.L_map,
+            self.H_map
+        )
+
         U_loc = np.asarray(U_loc).reshape(-1)
         return U_loc
-
-    def Power_Calc(self, device, U_loc):
+        
+    # 必要的傳輸功率
+    def Power_Calc(self, device , U_loc):
         if device < self.M:
             h_dist = self.CELL_DISTANCE * math.dist(U_loc, self.device_coord[device])
-            MIN_PWR = (
-                (h_dist ** 2 + self.H ** 2)
-                * (2 ** (self.PACKET_SIZE / self.B) - 1)
-                * self.SIGMA
-                / self.CHANNEL_GAIN
-            )
+            MIN_PWR = (h_dist ** 2 + self.H ** 2) * (2 ** (self.PACKET_SIZE/self.B) - 1) * self.SIGMA / self.CHANNEL_GAIN
         else:
             MIN_PWR = 0
         return MIN_PWR * self.energy_weight
-
+    
+    # 獎勵計算
     def Reward_Calc(self, AOI, power):
-        return -power - np.sum(AOI) / self.M
-
+        reward = 0
+        reward = reward - power - np.sum(AOI)/self.M
+        return reward
+    
+    # 風險機率  
     def Risk_prob(self, U_loc):
+        x, y = U_loc
+
         if self.is_coord_risky(U_loc):
             return self.prob_of_risk
-        return 0
-
+        else:
+            return 0
+    
+    # 執行環境
     def step(self, states, actions):
-        self.U_loc = states[0: self.U * 2]
-        self.AOI = states[self.U * 2: self.U * 2 + self.M]
-
+        
+        # 拆分狀態
+        self.U_loc = states[0 : self.U*2]
+        self.AOI = states[self.U*2 : self.U*2 + self.M]
+        
+        # AOI自然增長
         self.AOI = np.minimum(self.AOI + 1, self.AOI_max)
 
         self.power = 0
-        U_loc_next = np.zeros(self.U * 2)
-        rewards = [0] * self.U
-
+        U_loc_next = np.zeros(self.U*2)
+        rewards = [0]*self.U
+        
         for u in range(self.U):
-            u_loc = self.U_loc[u * 2: u * 2 + 2]
+
+            # 取得UAV當前位置與動作
+            u_loc = self.U_loc[u*2 : u*2+2]
             action = actions[u]
 
+            # 拆分動作
             self.u_action_select = action[0]
             self.u_action_move = action[1]
+            
+            if(self.done[u]==0):
+                # 更新UAV位置
+                u_loc = self.Update_Location(u_loc,self.u_action_move)
+                
+                # 計算基本功率
+                u_power = self.Power_Calc(self.u_action_select,u_loc)
 
-            if self.done[u] == 0:
-                u_loc = self.Update_Location(u_loc, self.u_action_move)
-
-                u_power = self.Power_Calc(self.u_action_select, u_loc)
-
-                # Keep the original reward timing for comparability with SAC.
                 rewards[u] = self.Reward_Calc(self.AOI, u_power)
 
+                # 取得風險機率
                 risk_prob = self.Risk_prob(u_loc)
                 if risk_prob > 0:
                     self.risk_count[u] = self.risk_count[u] + 1
+
+                    # 取樣以決定是否施加懲罰
                     sample_prob = random.random()
                     if sample_prob < risk_prob:
                         u_power += self.penalty
-
+                
                 self.power += u_power
                 self.AOI_Reset(self.u_action_select)
+            
+            # 更新狀態
+            U_loc_next[u*2 : u*2+2] = u_loc
+        
+        # 計算整體獎勵與各UAV獎勵
+        self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U)
 
-            U_loc_next[u * 2: u * 2 + 2] = u_loc
-
-        self.total_reward = self.Reward_Calc(self.AOI, self.power / self.U)
-
+        # 聚合狀態
         states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
-
-        if self.steps == self.max_steps:
+        
+        # 檢查是否終止
+        if(self.steps == self.max_steps):
             self.done = np.ones(self.U)
-        if sum(self.done) == self.U:
+        if(sum(self.done) == self.U):
             self.DONE = 1
 
         self.steps += 1
-
+        
         return states_next, rewards, self.done
