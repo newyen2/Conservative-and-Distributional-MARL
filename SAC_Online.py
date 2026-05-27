@@ -178,7 +178,7 @@ def Train_SAC_Online(device_coord,Risky_region):
     print(f"Total training wall time: {end_time - start_time:.2f} seconds")
 
     # # 產生CSV
-    df_src = fr"{config.PATH}\Datasets\Dataset_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
+    df_src = fr"{config.PATH}\Stored_Datas\dataset.csv"
     
     save_start = int((config.episodes * env.max_steps)/2)
     save_end = int(save_start + config.data_size * (config.episodes * env.max_steps)/100)
@@ -188,8 +188,8 @@ def Train_SAC_Online(device_coord,Risky_region):
     df.to_csv(df_src)
     
     # # 產生圖表
-    fig_src = fr"{config.PATH}\Results\Result_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.png"
-    fig_data_src = fr"{config.PATH}\Result_Datas\Result_Online_SACNNN_{str(config.data_size)}%_{str(config.U)}UAVs_{str(config.penalty)}pen_RND.csv"
+    fig_src = fr"{config.PATH}\Stored_Datas\result.png"
+    fig_data_src = fr"{config.PATH}\Stored_Datas\result_data.csv"
 
     window_size = 10
     eval_rewards_smooth = pd.Series(eval_rewards).rolling(window=window_size).mean()
@@ -206,7 +206,7 @@ def Train_SAC_Online(device_coord,Risky_region):
     pd.DataFrame(eval_rewards).to_csv(fig_data_src, index=False)
 
     # 產生超參數資訊
-    config_src = fr"{config.PATH}\SAC_Online_config.json"
+    config_src = fr"{config.PATH}\Stored_Datas\config.json"
 
     configs = {}
     configs['general'] = vars(config)
@@ -225,9 +225,9 @@ def Train_SAC_Online(device_coord,Risky_region):
     pd.Series(configs).to_json(config_src, orient="index", indent=4)
 
     episode_df = pd.DataFrame(episode_df)
-    episode_src = fr"{config.PATH}\episode2.parquet"
+    episode_src = fr"{config.PATH}\Stored_Datas\episode.parquet"
     episode_df.to_parquet(episode_src, engine="pyarrow")
 
     step_df = pd.DataFrame(step_df)
-    step_src = fr"{config.PATH}\step2.parquet"
+    step_src = fr"{config.PATH}\Stored_Datas\step.parquet"
     step_df.to_parquet(step_src, engine="pyarrow")

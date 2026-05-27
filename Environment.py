@@ -55,6 +55,7 @@ class Environment():
         self.energy_weight = config.energy_weight
         self.penalty = config.penalty
         self.prob_of_risk = config.prob_of_risk
+        self.boundary_penalty_weight = config.boundary_penalty_weight
         
         self.AOI_max = 100 # 最大AOI限制
 
@@ -69,7 +70,8 @@ class Environment():
     # 重置環境
     def reset(self):        
 
-        self.device_coord = generate_unique_coords(N = self.M)
+        # self.device_coord = generate_unique_coords(N = self.M)
+        self.device_coord = np.array([[3,1.5],[7,2.5],[6.5,7],[1,6.5],[7.5,5],[8.5,5],[9.5,1],[6.5,1],[4,7.5],[2.5,3]])
 
         # 初始化UAV位置
         self.UAVs_init_coord = np.array([])
@@ -118,18 +120,32 @@ class Environment():
         return False
 
     # 更新UAV的位置
-    def Update_Location(self, U_loc, V_selected):
-        U_loc = U_loc + V_selected
+    # def Update_Location(self, U_loc, V_selected):
+    #     U_loc = U_loc + V_selected
 
-        # 檢查(x,y)是否超過邊界
-        U_loc = np.clip(
-            U_loc,
+    #     # 檢查(x,y)是否超過邊界
+    #     U_loc = np.clip(
+    #         U_loc,
+    #         self.L_map,
+    #         self.H_map
+    #     )
+
+    #     U_loc = np.asarray(U_loc).reshape(-1)
+    #     return U_loc
+    def Update_Location(self, U_loc, V_selected):
+        raw_next_loc = U_loc + V_selected
+
+        clipped_next_loc = np.clip(
+            raw_next_loc,
             self.L_map,
             self.H_map
         )
 
-        U_loc = np.asarray(U_loc).reshape(-1)
-        return U_loc
+        boundary_violation = np.linalg.norm(raw_next_loc - clipped_next_loc)
+
+        clipped_next_loc = np.asarray(clipped_next_loc).reshape(-1)
+
+        return clipped_next_loc, boundary_violation
         
     # 必要的傳輸功率
     def Power_Calc(self, device , U_loc):
@@ -141,9 +157,9 @@ class Environment():
         return MIN_PWR * self.energy_weight
     
     # 獎勵計算
-    def Reward_Calc(self, AOI, power):
+    def Reward_Calc(self, AOI, power, boundary_penalty):
         reward = 0
-        reward = reward - power - np.sum(AOI)/self.M
+        reward = reward - power - np.sum(AOI)/self.M - boundary_penalty
         return reward
     
     # 風險機率  
@@ -181,12 +197,12 @@ class Environment():
             
             if(self.done[u]==0):
                 # 更新UAV位置
-                u_loc = self.Update_Location(u_loc,self.u_action_move)
-                
+                u_loc, boundary_violation = self.Update_Location(u_loc,self.u_action_move)
+
                 # 計算基本功率
                 u_power = self.Power_Calc(self.u_action_select,u_loc)
 
-                rewards[u] = self.Reward_Calc(self.AOI, u_power)
+                boundary_penalty = self.boundary_penalty_weight * boundary_violation
 
                 # 取得風險機率
                 risk_prob = self.Risk_prob(u_loc)
@@ -197,15 +213,18 @@ class Environment():
                     sample_prob = random.random()
                     if sample_prob < risk_prob:
                         u_power += self.penalty
-                
-                self.power += u_power
+
                 self.AOI_Reset(self.u_action_select)
+
+                rewards[u] = self.Reward_Calc(self.AOI, u_power, boundary_penalty)
+
+                self.power += u_power
             
             # 更新狀態
             U_loc_next[u*2 : u*2+2] = u_loc
         
         # 計算整體獎勵與各UAV獎勵
-        self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U)
+        self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U, 0)
 
         # 聚合狀態
         states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)

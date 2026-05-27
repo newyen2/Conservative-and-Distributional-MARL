@@ -1,7 +1,7 @@
 import numpy as np
 import time
 import torch
-from SAC_Online_OLD import Train_SAC_Online
+from SAC_Online import Train_SAC_Online
 # from MA_CIQL import Train_MA_CIQL
 # from MA_CCQL import Train_MA_CCQL
 # from MA_CIQR import Train_MA_CIQR
@@ -48,7 +48,8 @@ def train(model, device_coord, risky_region):
 
 
 # 裝置座標
-device_coord = np.array([[3,1],[7,2],[6,7],[1,6],[7,5],[8,5],[9,1],[6,1],[4,7],[2,3]])
+device_coord = np.array([[3,1.5],[7,2.5],[6.5,7],[1,6.5],[7.5,5],[8.5,5],[9.5,1],[6.5,1],[4,7.5],[2.5,3]])
+# device_coord = np.array([[3,1],[7,2],[6,7],[1,6],[7,5],[8,5],[9,1],[6,1],[4,7],[2,3]])
 # device_coord = np.array([[3,1],[7,2],[6,7],[1,6],[7,5],
 #                          [8,5],[9,1],[6,1],[4,7],[2,3],
 #                          [4,4],[1,9],[9,7],[5,5],[2,8]])
@@ -62,7 +63,7 @@ device_coord = np.array([[3,1],[7,2],[6,7],[1,6],[7,5],[8,5],[9,1],[6,1],[4,7],[
 
 
 risky_region = [
-    [3.0, 2.0, 6.0, 6.0],
+    [3.0, 2.0, 7.0, 7.0],
 ]
 
 model = "SAC"
