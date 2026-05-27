@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from utils import get_config, eval_runs, prep_dataloader, loss_update_cent, RNGManager
 from Code.agent_CQL import CQLAgent
-from Environment_OLD import Environment
+from Environment import Environment
 import matplotlib.pyplot as plt
 
 def Train_MA_CCQL(model,device_coord,risky_region,alpha):

@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from utils import get_config, eval_runs, prep_dataloader, RNGManager
 from Code.agent_CQL import CQLAgent
-from Environment_OLD import Environment
+from Environment import Environment
 import matplotlib.pyplot as plt
 
 def personalized_fedavg_shared_layers(agents, beta=0.5):
