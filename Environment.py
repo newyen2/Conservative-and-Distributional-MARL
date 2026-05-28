@@ -56,6 +56,7 @@ class Environment():
         self.penalty = config.penalty
         self.prob_of_risk = config.prob_of_risk
         self.boundary_penalty_weight = config.boundary_penalty_weight
+        self.max_power = config.max_power
         
         self.AOI_max = 100 # 最大AOI限制
 
@@ -154,7 +155,7 @@ class Environment():
             MIN_PWR = (h_dist ** 2 + self.H ** 2) * (2 ** (self.PACKET_SIZE/self.B) - 1) * self.SIGMA / self.CHANNEL_GAIN
         else:
             MIN_PWR = 0
-        return MIN_PWR * self.energy_weight
+        return MIN_PWR
     
     # 獎勵計算
     def Reward_Calc(self, AOI, power, boundary_penalty):
@@ -200,7 +201,10 @@ class Environment():
                 u_loc, boundary_violation = self.Update_Location(u_loc,self.u_action_move)
 
                 # 計算基本功率
-                u_power = self.Power_Calc(self.u_action_select,u_loc)
+                u_power = self.Power_Calc(self.u_action_select,u_loc) * self.energy_weight
+
+                if u_power <= self.max_power:
+                    self.AOI_Reset(self.u_action_select)    
 
                 boundary_penalty = self.boundary_penalty_weight * boundary_violation
 
@@ -213,8 +217,6 @@ class Environment():
                     sample_prob = random.random()
                     if sample_prob < risk_prob:
                         u_power += self.penalty
-
-                self.AOI_Reset(self.u_action_select)
 
                 rewards[u] = self.Reward_Calc(self.AOI, u_power, boundary_penalty)
 

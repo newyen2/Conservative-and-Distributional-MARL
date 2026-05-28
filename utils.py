@@ -57,7 +57,7 @@ def get_config():
     parser.add_argument("--prob_of_risk", type=float, default=0.1) # 具有風險時的懲罰機率, default: 0.1
     parser.add_argument("--max_mov", type=float, default=2) # 每個時間步的最大位移(論文中steps_mov = 1)
     parser.add_argument("--boundary_penalty_weight", type=float, default=10.0) # 移動超出邊界時的懲罰值
-
+    parser.add_argument("--max_power", type=float, default=10) # 能達成有效傳輸的最大功率
     parser.add_argument("--PATH", type=str, default=r"C:\Users\wish1\Desktop\Conservative-and-Distributional-MARL-main") # 存檔路徑
     
     return parser.parse_args(args=[])
