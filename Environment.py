@@ -56,7 +56,6 @@ class Environment():
         self.penalty = config.penalty
         self.prob_of_risk = config.prob_of_risk
         self.boundary_penalty_weight = config.boundary_penalty_weight
-        self.max_power = config.max_power
         
         self.AOI_max = 100 # 最大AOI限制
 
@@ -66,13 +65,13 @@ class Environment():
 
         self.nAction_move = 2
         self.nAction_select = self.M + 1
-        self.nObservation = self.U * 2 + self.M
+        self.nObservation = self.U * 2 + self.M * 3
         
     # 重置環境
     def reset(self):        
 
-        # self.device_coord = generate_unique_coords(N = self.M)
-        self.device_coord = np.array([[3,1.5],[7,2.5],[6.5,7],[1,6.5],[7.5,5],[8.5,5],[9.5,1],[6.5,1],[4,7.5],[2.5,3]])
+        self.device_coord = generate_unique_coords(N = self.M)
+        # self.device_coord = np.array([[3,1.5],[7,2.5],[6.5,7],[1,6.5],[7.5,5],[8.5,5],[9.5,1],[6.5,1],[4,7.5],[2.5,3]])
 
         # 初始化UAV位置
         self.UAVs_init_coord = np.array([])
@@ -102,7 +101,7 @@ class Environment():
 
         self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
             
-        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
+        return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
     
     # 重置AOI
     def AOI_Reset(self, device):
@@ -203,8 +202,7 @@ class Environment():
                 # 計算基本功率
                 u_power = self.Power_Calc(self.u_action_select,u_loc) * self.energy_weight
 
-                if u_power <= self.max_power:
-                    self.AOI_Reset(self.u_action_select)    
+                self.AOI_Reset(self.u_action_select)    
 
                 boundary_penalty = self.boundary_penalty_weight * boundary_violation
 
@@ -229,7 +227,7 @@ class Environment():
         self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U, 0)
 
         # 聚合狀態
-        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
+        states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
         
         # 檢查是否終止
         if(self.steps == self.max_steps):
