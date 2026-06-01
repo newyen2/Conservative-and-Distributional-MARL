@@ -101,6 +101,7 @@ class Environment():
 
         self.risk_count = np.zeros(self.U) # UAV進入風險區域的次數 
             
+        # return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI), axis=None)
         return np.concatenate((np.asarray(self.UAVs_init_coord).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
     
     # 重置AOI
@@ -184,9 +185,19 @@ class Environment():
         self.power = 0
         U_loc_next = np.zeros(self.U*2)
         rewards = [0]*self.U
+
+        total_boundary_penalty = 0
         
         for u in range(self.U):
+            # 取得UAV當前位置與動作
+            u_loc = self.U_loc[u*2 : u*2+2]
+            action = actions[u]
 
+            # 拆分動作
+            self.u_action_select = action[0]
+            self.AOI_Reset(self.u_action_select)
+
+        for u in range(self.U):
             # 取得UAV當前位置與動作
             u_loc = self.U_loc[u*2 : u*2+2]
             action = actions[u]
@@ -202,9 +213,8 @@ class Environment():
                 # 計算基本功率
                 u_power = self.Power_Calc(self.u_action_select,u_loc) * self.energy_weight
 
-                self.AOI_Reset(self.u_action_select)    
-
                 boundary_penalty = self.boundary_penalty_weight * boundary_violation
+                total_boundary_penalty += boundary_penalty
 
                 # 取得風險機率
                 risk_prob = self.Risk_prob(u_loc)
@@ -224,9 +234,14 @@ class Environment():
             U_loc_next[u*2 : u*2+2] = u_loc
         
         # 計算整體獎勵與各UAV獎勵
+        total_reward = self.Reward_Calc(self.AOI, self.power/self.U, total_boundary_penalty/self.U)
+        for u in range(self.U):
+            rewards[u] = total_reward
+
         self.total_reward = self.Reward_Calc(self.AOI, self.power/self.U, 0)
 
         # 聚合狀態
+        # states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI), axis=None)
         states_next = np.concatenate((np.asarray(U_loc_next).reshape(-1), self.AOI, np.asarray(self.device_coord).reshape(-1)), axis=None)
         
         # 檢查是否終止

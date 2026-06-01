@@ -37,8 +37,8 @@
         "fig_data_src":"C:\\Users\\wish1\\Desktop\\Conservative-and-Distributional-MARL-main\\Stored_Datas\\result_data.csv"
     },
     "info":{
-        "date":"2026-05-28 14:04:56",
-        "wall_time_second":919.03
+        "date":"2026-05-28 15:51:41",
+        "wall_time_second":752.06
     },
-    "comment":"基於(3)，額外添加狀態初始化"
+    "comment":"基於(8)，使用共同Reward代表獨立Reward"
 }
