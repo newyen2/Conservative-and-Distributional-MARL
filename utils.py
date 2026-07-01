@@ -17,9 +17,9 @@ def collect_random(env, U, dataset, steps = 500):
         for _ in range(U):
             select_action = random.randrange(env.nAction_select)
             move_action = np.random.uniform(
-                low=-config.max_mov,
-                high=config.max_mov,
-                size=env.nAction_move
+                low = 0.0,
+                high = 10.0,
+                size = env.nAction_move
             ).astype(np.float32)
 
             actions.append([select_action, move_action])

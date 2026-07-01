@@ -18,7 +18,7 @@
         "data_size":16,
         "prob_of_risk":0.1,
         "max_mov":2,
-        "boundary_penalty_weight":1.0,
+        "boundary_penalty_weight":10.0,
         "PATH":"C:\\Users\\wish1\\Desktop\\Conservative-and-Distributional-MARL-main"
     },
     "agent":{
@@ -37,8 +37,8 @@
         "fig_data_src":"C:\\Users\\wish1\\Desktop\\Conservative-and-Distributional-MARL-main\\Stored_Datas\\result_data.csv"
     },
     "info":{
-        "date":"2026-05-28 05:05:14",
-        "wall_time_second":932.44
+        "date":"2026-07-01 11:49:21",
+        "wall_time_second":1208.58
     },
-    "comment":"基於(1)，修改Reward順序，增加UAV撞邊界的penalty"
+    "comment":"修正collect_random"
 }

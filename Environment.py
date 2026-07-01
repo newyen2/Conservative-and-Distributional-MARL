@@ -133,8 +133,16 @@ class Environment():
 
     #     U_loc = np.asarray(U_loc).reshape(-1)
     #     return U_loc
-    def Update_Location(self, U_loc, V_selected):
-        raw_next_loc = U_loc + V_selected
+    def Update_Location(self, U_loc, target_loc):
+        move_vec = target_loc - U_loc
+
+        move_dist = np.linalg.norm(move_vec)
+        
+        if move_dist > 2:
+            move_vec = move_vec / move_dist * 2
+
+        raw_next_loc = U_loc + move_vec
+
 
         clipped_next_loc = np.clip(
             raw_next_loc,

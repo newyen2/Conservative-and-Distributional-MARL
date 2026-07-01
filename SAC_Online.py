@@ -66,7 +66,7 @@ def Train_SAC_Online(device_coord,Risky_region):
     step_df['device_pos'] = []
     step_df['device_AOI'] = []
     step_df['UAV_action_select'] = []
-    step_df['UAV_action_move'] = []
+    step_df['UAV_target_point'] = []
     step_df['reward'] = []
 
     # 評估獎勵
@@ -157,7 +157,7 @@ def Train_SAC_Online(device_coord,Risky_region):
             step_df['device_AOI'].append(states.copy()[4:14])
             step_df['device_pos'].append(env.device_coord.tolist())
             step_df['UAV_action_select'].append([i[0] for i in actions])
-            step_df['UAV_action_move'].append([i[1].tolist() for i in actions])
+            step_df['UAV_target_point'].append([i[1].tolist() for i in actions])
             step_df['reward'].append(rewards)
 
             if env.DONE:

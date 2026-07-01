@@ -18,6 +18,7 @@
         "data_size":16,
         "prob_of_risk":0.1,
         "max_mov":2,
+        "boundary_penalty_weight":10.0,
         "PATH":"C:\\Users\\wish1\\Desktop\\Conservative-and-Distributional-MARL-main"
     },
     "agent":{
@@ -36,8 +37,8 @@
         "fig_data_src":"C:\\Users\\wish1\\Desktop\\Conservative-and-Distributional-MARL-main\\Stored_Datas\\result_data.csv"
     },
     "info":{
-        "date":"2026-05-28 04:23:54",
-        "wall_time_second":871.46
+        "date":"2026-07-01 11:22:16",
+        "wall_time_second":1068.86
     },
-    "comment":"固定座標 沒有裝置狀態 普通SAC reward分開計算"
+    "comment":"動作範圍改為目標位置"
 }

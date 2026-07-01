@@ -63,7 +63,7 @@ def parse_episode_data(episode_data):
     }
 
 def parse_step_data(step_data):
-    keys = ["step", "UAV_pos", "device_pos", "device_AOI", "UAV_action_select", "UAV_action_move", "reward"]
+    keys = ["step", "UAV_pos", "device_pos", "device_AOI", "UAV_action_select", "UAV_target_point", "reward"]
     step_all = {key: [] for key in keys}
 
     for _, step_row in step_data.iterrows():
@@ -75,7 +75,7 @@ def parse_step_data(step_data):
 
         device_pos = [arr.tolist() for arr in step_row["device_pos"]]
 
-        UAV_action_move = [arr.tolist() for arr in step_row["UAV_action_move"]]
+        UAV_target_point = [arr.tolist() for arr in step_row["UAV_target_point"]]
         
 
         step_all["step"].append(step)
@@ -83,7 +83,7 @@ def parse_step_data(step_data):
         step_all["device_pos"].append(device_pos)
         step_all["device_AOI"].append(step_row["device_AOI"].tolist())
         step_all["UAV_action_select"].append(step_row["UAV_action_select"].tolist())
-        step_all["UAV_action_move"].append(UAV_action_move)
+        step_all["UAV_target_point"].append(UAV_target_point)
         step_all["reward"].append(step_row["reward"].tolist())
 
     return step_all
@@ -223,6 +223,7 @@ class EpisodeStepViewer:
         device_pos = self.step_data["device_pos"][self.step - 1]
         device_AOI = self.step_data["device_AOI"][self.step - 1]
         UAV_action_select = self.step_data["UAV_action_select"][self.step - 1]
+        UAV_target_point = self.step_data["UAV_target_point"][self.step - 1]
         reward = self.step_data["reward"][self.step - 1]
 
         title = f"Episode {episode} | Step {self.step}"
@@ -243,6 +244,7 @@ class EpisodeStepViewer:
         else:
             traj_UAV_pos = []
         traj_UAV_pos.extend(self.step_data["UAV_pos"][traj_start : self.step])
+        self.draw_target(UAV_target_pos = UAV_target_point)
         self.draw_trajectory(traj_UAV_pos = traj_UAV_pos)
 
         self.draw_service(
@@ -260,6 +262,11 @@ class EpisodeStepViewer:
         self.ax.set_ylim(-1, 11)
         self.ax.legend(loc="upper right", bbox_to_anchor=(1.4, 1))
         self.fig.canvas.draw_idle()
+
+    def draw_target(self, UAV_target_pos):
+        UAV_x = [p[0] for p in UAV_target_pos]
+        UAV_y = [p[1] for p in UAV_target_pos]
+        self.ax.scatter(UAV_x, UAV_y, s=200, marker="1", label="Target")
 
     def draw_trajectory(self, traj_UAV_pos):
         for u in range(len(traj_UAV_pos[0])):

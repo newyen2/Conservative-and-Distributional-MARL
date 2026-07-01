@@ -81,11 +81,11 @@ class SACAgent():
 
         tanh_action = torch.tanh(raw_continuous_action)
 
-        continuous_action = tanh_action * self.max_mov 
+        continuous_action = tanh_action * 5 + 5
 
         continuous_log_prob = normal_dist.log_prob(raw_continuous_action) - torch.log(1.0 - tanh_action.pow(2) + 1e-6)
 
-        scale = torch.as_tensor(self.max_mov, dtype=torch.float32, device=self.device)
+        scale = torch.as_tensor(5, dtype=torch.float32, device=self.device)
         continuous_log_prob -= torch.log(scale + 1e-6)
 
         continuous_log_prob = continuous_log_prob.sum(dim=-1, keepdim=True)
