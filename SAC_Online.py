@@ -11,14 +11,16 @@ import time
 from tqdm import tqdm
 import sys
 
-def Train_SAC_Online(device_coord,Risky_region):
-    torch.cuda.synchronize()
+
+def Train_SAC_Online(device_coord, Risky_region):
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     start_time = time.perf_counter()
 
     # 初始化RNG, 環境與超參數
     config = get_config()
     rng = RNGManager()
-    env = Environment(device_coord,Risky_region,config)
+    env = Environment(device_coord, Risky_region, config)
 
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     device = "cpu"
@@ -32,7 +34,6 @@ def Train_SAC_Online(device_coord,Risky_region):
     for i in range(config.U):
         agent = SACAgent(
             state_size=env.nObservation,
-            continuous_action_size=env.nAction_move,
             discrete_action_size=env.nAction_select,
             device=device
         )
@@ -70,10 +71,11 @@ def Train_SAC_Online(device_coord,Risky_region):
     step_df['reward'] = []
 
     # 評估獎勵
-    eval_rewards = [] 
+    eval_rewards = []
 
     pbar_episode = tqdm(
         range(1, config.episodes + 1),
+        # range(1, 10),
         desc="Episode",
         position=0,
         leave=True,
@@ -85,8 +87,8 @@ def Train_SAC_Online(device_coord,Risky_region):
         # 初始化
         states = env.reset()
         actions = [0] * config.U
-        episode_reward = 0.0 # 本次Episode的全局獎勵
-        agent_rewards = np.zeros(config.U) # 個別Agent的獎勵
+        episode_reward = 0.0  # 本次Episode的全局獎勵
+        agent_rewards = np.zeros(config.U)  # 個別Agent的獎勵
 
         episode_df['episode'].append(episode)
         episode_df['init_UAV_pos'].append(env.UAVs_init_coord)
@@ -103,7 +105,7 @@ def Train_SAC_Online(device_coord,Risky_region):
         )
 
         for _ in pbar_step:
-            # 個別UAV取得動作並執行
+            # 個別UAV取得離散服務動作並執行
             for u in range(config.U):
                 actions[u] = agents[u].get_action(states)
 
@@ -111,13 +113,8 @@ def Train_SAC_Online(device_coord,Risky_region):
 
             # 紀錄Experience至ReplayBuffer並採樣訓練
             for u in range(config.U):
-                select_action = actions[u][0]
-                continuous_action = np.asarray(actions[u][1], dtype=np.float32)
-
-                action_vec = np.concatenate(
-                    ([select_action], continuous_action),
-                    axis=None
-                ).astype(np.float32)
+                select_action = actions[u]
+                action_vec = np.asarray([select_action], dtype=np.float32)
 
                 buffers[u].add(states, action_vec, rewards[u], next_states, done[u])
                 agent_rewards[u] += rewards[u]
@@ -131,19 +128,17 @@ def Train_SAC_Online(device_coord,Risky_region):
             flat_actions = []
 
             for u in range(config.U):
-                select_action = actions[u][0]
-                continuous_action = np.asarray(actions[u][1], dtype=np.float32)
-
-                flat_actions.extend([select_action] + continuous_action.tolist())
+                select_action = actions[u]
+                flat_actions.append(select_action)
 
             dataset = np.concatenate((
-                    states,
-                    np.asarray(flat_actions, dtype=np.float32),
-                    [rewards[0]],
-                    next_states,
-                    [done[0]]
-                ), axis=None)
-            if(steps == 0):
+                states,
+                np.asarray(flat_actions, dtype=np.float32),
+                [rewards[0]],
+                next_states,
+                [done[0]]
+            ), axis=None)
+            if steps == 0:
                 df = pd.DataFrame([dataset])
             else:
                 df.loc[len(df)] = dataset
@@ -156,8 +151,8 @@ def Train_SAC_Online(device_coord,Risky_region):
             step_df['UAV_pos'].append(states.copy()[:4])
             step_df['device_AOI'].append(states.copy()[4:14])
             step_df['device_pos'].append(env.device_coord.tolist())
-            step_df['UAV_action_select'].append([i[0] for i in actions])
-            step_df['UAV_target_point'].append([i[1].tolist() for i in actions])
+            step_df['UAV_action_select'].append([int(i) for i in actions])
+            step_df['UAV_target_point'].append([p.tolist() for p in env.last_target_points])
             step_df['reward'].append(rewards)
 
             if env.DONE:
@@ -172,21 +167,22 @@ def Train_SAC_Online(device_coord,Risky_region):
 
             tqdm.write(f"Eval_Reward: {eval_reward}")
 
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     end_time = time.perf_counter()
 
     print(f"Total training wall time: {end_time - start_time:.2f} seconds")
 
     # # 產生CSV
     df_src = fr"{config.PATH}\Stored_Datas\dataset.csv"
-    
-    save_start = int((config.episodes * env.max_steps)/2)
-    save_end = int(save_start + config.data_size * (config.episodes * env.max_steps)/100)
-    
+
+    save_start = int((config.episodes * env.max_steps) / 2)
+    save_end = int(save_start + config.data_size * (config.episodes * env.max_steps) / 100)
+
     df = df.iloc[save_start:save_end]
-    
+
     df.to_csv(df_src)
-    
+
     # # 產生圖表
     fig_src = fr"{config.PATH}\Stored_Datas\result.png"
     fig_data_src = fr"{config.PATH}\Stored_Datas\result_data.csv"
