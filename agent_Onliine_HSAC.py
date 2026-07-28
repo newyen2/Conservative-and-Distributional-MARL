@@ -109,7 +109,7 @@ class HSAC_Agent:
             layer_size=self.hidden_size,
         ).to(self.device)
 
-        # [7. Joint twin Critic] 共同評估 S、goal、move 與 service 組成的完整低層動作。
+        # [7. Joint twin Critic] 以移動後狀態直接評估服務距離及完整低層動作。
         self.critic_network_1 = SAC_Critic(
             input_size=self.critic_input_size,
             layer_size=self.hidden_size,
@@ -607,16 +607,16 @@ class HSAC_Agent:
 
     def build_joint_critic_input(
         self,
-        states,
+        moved_states,
         goals,
         move_actions,
         service_actions,
     ):
-        """功能：拼接 S、goal、move 與 service one-hot，建立 joint Critic 輸入。"""
-        state_batch = self._ensure_feature_batch(
-            states,
+        """功能：拼接移動後狀態、goal、move 與 service，讓 Critic 直接看到服務距離。"""
+        moved_state_batch = self._ensure_feature_batch(
+            moved_states,
             self.state_size,
-            "states",
+            "moved_states",
         )
         goal_batch = self._ensure_feature_batch(
             self.goal_to_onehot(goals),
@@ -635,12 +635,12 @@ class HSAC_Agent:
         )
 
         (
-            state_batch,
+            moved_state_batch,
             goal_batch,
             move_batch,
             service_batch,
         ) = self._align_batch_sizes(
-            state_batch,
+            moved_state_batch,
             goal_batch,
             move_batch,
             service_batch,
@@ -648,7 +648,7 @@ class HSAC_Agent:
 
         return torch.cat(
             (
-                state_batch,
+                moved_state_batch,
                 goal_batch,
                 move_batch,
                 service_batch,
@@ -659,16 +659,16 @@ class HSAC_Agent:
     def critic_all_services(
         self,
         critic,
-        states,
+        moved_states,
         goals,
         move_actions,
         action_mask=None,
     ):
         """功能：枚舉 M+1 個服務動作的 Q-value，供離散 SAC 期望值更新使用。"""
-        state_batch = self._ensure_feature_batch(
-            states,
+        moved_state_batch = self._ensure_feature_batch(
+            moved_states,
             self.state_size,
-            "states",
+            "moved_states",
         )
         goal_batch = self._ensure_feature_batch(
             self.goal_to_onehot(goals),
@@ -680,17 +680,17 @@ class HSAC_Agent:
             self.move_action_size,
             "move_actions",
         )
-        state_batch, goal_batch, move_batch = self._align_batch_sizes(
-            state_batch,
+        moved_state_batch, goal_batch, move_batch = self._align_batch_sizes(
+            moved_state_batch,
             goal_batch,
             move_batch,
         )
 
-        batch_size = state_batch.shape[0]
+        batch_size = moved_state_batch.shape[0]
         num_services = self.service_action_size
 
-        # 每筆 S、goal 與 move 複製 M+1 次，分別搭配一個服務動作。
-        expanded_states = state_batch.unsqueeze(1).expand(
+        # 每筆 S'、goal 與 move 複製 M+1 次，分別搭配一個服務動作。
+        expanded_states = moved_state_batch.unsqueeze(1).expand(
             -1,
             num_services,
             -1,
@@ -806,7 +806,7 @@ class HSAC_Agent:
         data = self._prepare_low_experiences(experiences)
         low_targets = self.compute_low_target(data)
         critic_input = self.build_joint_critic_input(
-            data["states"],
+            data["moved_states"],
             data["goals"],
             data["move_actions"],
             data["service_actions"],
@@ -859,8 +859,10 @@ class HSAC_Agent:
             move_actions,
         )
 
-        # 更新 MoveActor 時固定 SelectActor，只用其服務分布加權所有 Q-value。
-        with torch.no_grad():
+        # 凍結 SelectActor 權重，但保留 moved_state -> service probability
+        # 對 move action 的梯度，使移動策略能感知位置如何改變後續服務。
+        self._set_service_actor_grad(False)
+        try:
             (
                 _,
                 service_probs,
@@ -871,18 +873,20 @@ class HSAC_Agent:
                 action_mask=action_mask,
                 deterministic=False,
             )
+        finally:
+            self._set_service_actor_grad(True)
 
         self._set_online_critic_grad(False)
         try:
             q_1_all = self.critic_all_services(
                 self.critic_network_1,
-                states,
+                moved_states,
                 goals,
                 move_actions,
             )
             q_2_all = self.critic_all_services(
                 self.critic_network_2,
-                states,
+                moved_states,
                 goals,
                 move_actions,
             )
@@ -938,13 +942,13 @@ class HSAC_Agent:
         with torch.no_grad():
             q_1_all = self.critic_all_services(
                 self.critic_network_1,
-                states,
+                moved_states,
                 goals,
                 move_actions,
             )
             q_2_all = self.critic_all_services(
                 self.critic_network_2,
-                states,
+                moved_states,
                 goals,
                 move_actions,
             )
@@ -1032,13 +1036,13 @@ class HSAC_Agent:
 
             target_q_1_all = self.critic_all_services(
                 self.target_critic_network_1,
-                data["next_states"],
+                next_moved_states,
                 data["next_goals"],
                 next_move_actions,
             )
             target_q_2_all = self.critic_all_services(
                 self.target_critic_network_2,
-                data["next_states"],
+                next_moved_states,
                 data["next_goals"],
                 next_move_actions,
             )
@@ -1181,6 +1185,21 @@ class HSAC_Agent:
             self.move_action_size,
             "move_actions",
         )
+        executed_move_values = self._experience_field(
+            experiences,
+            ("executed_moves", "executed_move"),
+            None,
+            required=False,
+        )
+        executed_moves = (
+            move_actions
+            if executed_move_values is None
+            else self._ensure_feature_batch(
+                executed_move_values,
+                self.move_action_size,
+                "executed_moves",
+            )
+        )
         moved_states = self._ensure_feature_batch(
             self._experience_field(
                 experiences,
@@ -1259,6 +1278,11 @@ class HSAC_Agent:
                 move_actions,
                 batch_size,
                 "move_actions",
+            ),
+            "executed_moves": self._expand_experience_batch(
+                executed_moves,
+                batch_size,
+                "executed_moves",
             ),
             "moved_states": self._expand_experience_batch(
                 moved_states,
@@ -1440,7 +1464,7 @@ class HSAC_Agent:
 
         moved_states = self.move_preview_fn(
             states.detach(),
-            move_actions.detach(),
+            move_actions,
         )
         moved_states = self._ensure_feature_batch(
             moved_states,
@@ -1462,6 +1486,11 @@ class HSAC_Agent:
         ):
             for parameter in critic.parameters():
                 parameter.requires_grad_(enabled)
+
+    def _set_service_actor_grad(self, enabled):
+        """功能：更新 MoveActor 時固定服務網路權重，但保留輸入狀態的梯度。"""
+        for parameter in self.service_actor.parameters():
+            parameter.requires_grad_(enabled)
 
     def apply_action_mask(self, logits, action_mask):
         """功能：將非法服務動作從 SelectActor 的 categorical 分布中排除。"""
@@ -1667,6 +1696,7 @@ class HSAC_Agent:
             "move_input_size": self.move_input_size,
             "service_input_size": self.service_input_size,
             "critic_input_size": self.critic_input_size,
+            "critic_state_contract": "moved_state",
             "hidden_size": self.hidden_size,
             "high_interval": self.high_interval,
             "max_movement": self.max_movement,

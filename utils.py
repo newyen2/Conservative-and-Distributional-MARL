@@ -76,7 +76,7 @@ def get_config(args=None):
     parser.add_argument("--low_batch_size", type=int, default=32)
     parser.add_argument("--high_batch_size", type=int, default=32)
     parser.add_argument("--low_update_frequency", type=int, default=1)
-    parser.add_argument("--high_update_frequency", type=int, default=1)
+    parser.add_argument("--high_update_frequency", type=int, default=5)
     parser.add_argument("--updates_per_step", type=int, default=1)
     parser.add_argument("--high_gamma", type=float, default=0.99)
     parser.add_argument("--low_gamma", type=float, default=0.99)
@@ -84,6 +84,21 @@ def get_config(args=None):
     parser.add_argument("--eval_episodes", type=int, default=10)
     parser.add_argument("--high_target_update_interval", type=int, default=100)
     parser.add_argument("--gradient_clip_norm", type=float, default=1.0)
+    parser.add_argument(
+        "--goal_progress_weight",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--wasted_move_weight",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--goal_completion_bonus",
+        type=float,
+        default=1.0,
+    )
     parser.add_argument(
         "--progress_interval",
         type=int,

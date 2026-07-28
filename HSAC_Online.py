@@ -103,6 +103,17 @@ class HSACOnlineTrainer:
                 ),
             ),
         )
+        # Base local reward 保留原 team reward 的平均值，同時讓每個 Critic
+        # 直接對自己的 power 與 risk 負責；其餘 shaping 可獨立調整。
+        self.goal_progress_weight = float(
+            config_value("goal_progress_weight", 1.0)
+        )
+        self.wasted_move_weight = float(
+            config_value("wasted_move_weight", 1.0)
+        )
+        self.goal_completion_bonus = float(
+            config_value("goal_completion_bonus", 1.0)
+        )
         self.high_interval = max(
             1,
             int(config_value("high_interval", 5)),
@@ -163,7 +174,12 @@ class HSACOnlineTrainer:
         )
         self.high_update_frequency = max(
             1,
-            int(config_value("high_update_frequency", 1)),
+            int(
+                config_value(
+                    "high_update_frequency",
+                    self.high_interval,
+                )
+            ),
         )
         self.updates_per_step = max(
             1,
@@ -275,6 +291,10 @@ class HSACOnlineTrainer:
         self.segment_durations = np.zeros(
             self.num_uavs,
             dtype=np.int32,
+        )
+        self.segment_goal_completed = np.zeros(
+            self.num_uavs,
+            dtype=np.bool_,
         )
 
         # [12. 訓練紀錄] initialize_logs() 後再建立正式欄位。
@@ -519,6 +539,10 @@ class HSACOnlineTrainer:
             self.num_uavs,
             dtype=np.int32,
         )
+        self.segment_goal_completed = np.zeros(
+            self.num_uavs,
+            dtype=np.bool_,
+        )
 
         return self.current_state.copy()
 
@@ -629,6 +653,7 @@ class HSACOnlineTrainer:
             )
             self.current_goals[int(agent_index)] = new_goal
             self.segment_goals[int(agent_index)] = new_goal
+            self.segment_goal_completed[int(agent_index)] = False
 
         return self.current_goals.copy(), refresh_mask
 
@@ -799,8 +824,12 @@ class HSACOnlineTrainer:
         next_state,
         move_info,
         service_info,
+        move_actions=None,
+        goals=None,
+        goal_completed=None,
+        return_info=False,
     ):
-        """功能：依目前實驗公式將 AOI、power、risk 等量測組合成各 Agent reward。"""
+        """功能：計算可歸因的 local reward，並加入 goal 與無效移動 shaping。"""
         # 驗證三種 state 都維持相同的全域 observation 契約。
         for agent_index in range(self.num_uavs):
             self._state_for_agent(
@@ -837,23 +866,132 @@ class HSACOnlineTrainer:
                 "move_info['risk_triggered'] 必須為每架 UAV 提供一個值。"
             )
 
-        # 沿用舊實驗的共享 team reward，並將 power 與 risk 都先取 UAV 平均。
+        # 每個 Agent 使用自己的 power/risk；base rewards 的平均仍等於
+        # 舊公式的 team reward，額外 shaping 則只用於改善學習訊號。
         aoi_cost = float(service_info["mean_aoi"])
-        energy_cost = self.energy_weight * float(np.mean(power))
-        risk_cost = self.risk_penalty * float(
-            np.mean(risk_triggered)
-        )
-        team_reward = -(
+        base_rewards = -(
             aoi_cost
-            + energy_cost
-            + risk_cost
+            + self.energy_weight * power
+            + self.risk_penalty * risk_triggered
         )
 
-        return np.full(
-            self.num_uavs,
-            team_reward,
+        state_array = np.asarray(state, dtype=np.float32).reshape(-1)
+        moved_state_array = np.asarray(
+            moved_state,
             dtype=np.float32,
+        ).reshape(-1)
+        current_locations = state_array[
+            : self.num_uavs * 2
+        ].reshape(self.num_uavs, 2)
+        moved_locations = moved_state_array[
+            : self.num_uavs * 2
+        ].reshape(self.num_uavs, 2)
+        device_start = self.num_uavs * 2 + self.num_devices
+        device_coord = state_array[
+            device_start:
+            device_start + self.num_devices * 2
+        ].reshape(self.num_devices, 2)
+
+        goal_progress = np.zeros(self.num_uavs, dtype=np.float32)
+        new_goal_completion = np.zeros(
+            self.num_uavs,
+            dtype=np.bool_,
         )
+        goal_values = None
+        if goals is not None:
+            goal_values = np.asarray(
+                goals,
+                dtype=np.int64,
+            ).reshape(self.num_uavs)
+            valid_goals = (
+                (goal_values >= 0)
+                & (goal_values < self.num_devices)
+            )
+            for agent_index in np.flatnonzero(valid_goals):
+                target = device_coord[goal_values[agent_index]]
+                before_distance = np.linalg.norm(
+                    current_locations[agent_index] - target
+                )
+                after_distance = np.linalg.norm(
+                    moved_locations[agent_index] - target
+                )
+                goal_progress[agent_index] = (
+                    before_distance - after_distance
+                )
+
+            completed_before = (
+                np.zeros(self.num_uavs, dtype=np.bool_)
+                if goal_completed is None
+                else np.asarray(
+                    goal_completed,
+                    dtype=np.bool_,
+                ).reshape(self.num_uavs)
+            )
+            service_targets = np.asarray(
+                service_info["service_targets"],
+                dtype=np.int64,
+            ).reshape(self.num_uavs)
+            new_goal_completion = (
+                valid_goals
+                & ~completed_before
+                & (service_targets == goal_values)
+            )
+
+        executed_moves = np.asarray(
+            move_info["movement"],
+            dtype=np.float32,
+        ).reshape(self.num_uavs, 2)
+        if move_actions is None:
+            command_moves = executed_moves
+        else:
+            command_moves = np.asarray(
+                move_actions,
+                dtype=np.float32,
+            ).reshape(self.num_uavs, 2)
+        wasted_move = np.linalg.norm(
+            command_moves - executed_moves,
+            axis=1,
+        ).astype(np.float32, copy=False)
+
+        movement_scale = max(self.max_movement, 1e-6)
+        normalized_progress = np.clip(
+            goal_progress / movement_scale,
+            -1.0,
+            1.0,
+        )
+        normalized_waste = np.clip(
+            wasted_move / movement_scale,
+            0.0,
+            1.0,
+        )
+        rewards = (
+            base_rewards
+            + self.goal_progress_weight * normalized_progress
+            - self.wasted_move_weight * normalized_waste
+            + self.goal_completion_bonus
+            * new_goal_completion.astype(np.float32)
+        ).astype(np.float32, copy=False)
+
+        reward_info = {
+            "base_rewards": base_rewards.astype(
+                np.float32,
+                copy=False,
+            ),
+            "goal_progress": goal_progress,
+            "normalized_goal_progress": normalized_progress.astype(
+                np.float32,
+                copy=False,
+            ),
+            "new_goal_completion": new_goal_completion,
+            "wasted_move": wasted_move,
+            "normalized_wasted_move": normalized_waste.astype(
+                np.float32,
+                copy=False,
+            ),
+        }
+        if return_info:
+            return rewards, reward_info
+        return rewards
 
     def collect_environment_step(
         self,
@@ -888,13 +1026,20 @@ class HSACOnlineTrainer:
             service_actions
         )
 
-        rewards = self.calculate_step_rewards(
+        rewards, reward_info = self.calculate_step_rewards(
             state=state,
             moved_state=moved_state,
             next_state=next_state,
             move_info=move_info,
             service_info=service_info,
+            move_actions=move_actions,
+            goals=goals,
+            goal_completed=self.segment_goal_completed,
+            return_info=True,
         )
+        self.segment_goal_completed |= reward_info[
+            "new_goal_completion"
+        ]
 
         self.current_state = next_state.copy()
         self.terminated = bool(done)
@@ -917,6 +1062,7 @@ class HSACOnlineTrainer:
             "done": bool(done),
             "move_info": move_info,
             "service_info": service_info,
+            "reward_info": reward_info,
         }
 
     # ------------------------------------------------------------------
@@ -935,6 +1081,7 @@ class HSACOnlineTrainer:
         done,
         action_masks=None,
         next_action_masks=None,
+        executed_moves=None,
     ):
         """功能：每個 timestep 為所有 Agent 保存一筆 low-level transition。"""
         if len(self.low_buffers) != self.num_uavs:
@@ -995,6 +1142,15 @@ class HSACOnlineTrainer:
                 next_action_mask=self._mask_for_agent(
                     next_action_masks,
                     agent_index,
+                ),
+                executed_move=self._vector_for_agent(
+                    (
+                        move_actions
+                        if executed_moves is None
+                        else executed_moves
+                    ),
+                    agent_index,
+                    "executed_moves",
                 ),
             )
 
@@ -1223,13 +1379,20 @@ class HSACOnlineTrainer:
             next_state, done, service_info = self.env.service_step(
                 service_actions
             )
-            rewards = self.calculate_step_rewards(
+            rewards, reward_info = self.calculate_step_rewards(
                 state=state,
                 moved_state=moved_state,
                 next_state=next_state,
                 move_info=move_info,
                 service_info=service_info,
+                move_actions=move_actions,
+                goals=goals,
+                goal_completed=self.segment_goal_completed,
+                return_info=True,
             )
+            self.segment_goal_completed |= reward_info[
+                "new_goal_completion"
+            ]
             next_goals, _ = self.update_high_context(
                 rewards=rewards,
                 next_state=next_state,
@@ -1253,6 +1416,7 @@ class HSACOnlineTrainer:
                 done=done,
                 action_masks=action_masks,
                 next_action_masks=next_action_masks,
+                executed_moves=move_info["movement"],
             )
 
             self.current_state = next_state.copy()
@@ -1410,9 +1574,15 @@ class HSACOnlineTrainer:
             self.num_uavs,
             dtype=np.float32,
         )
+        base_agent_returns = np.zeros(
+            self.num_uavs,
+            dtype=np.float32,
+        )
         total_power = 0.0
         total_risk_events = 0
         total_movement_distance = 0.0
+        total_wasted_move = 0.0
+        total_goal_completions = 0
 
         while not self.terminated:
             state = self.current_state.copy()
@@ -1445,6 +1615,7 @@ class HSACOnlineTrainer:
                 done=step_data["done"],
                 action_masks=step_data["action_masks"],
                 next_action_masks=next_action_masks,
+                executed_moves=step_data["move_info"]["movement"],
             )
 
             self.global_step += 1
@@ -1458,6 +1629,9 @@ class HSACOnlineTrainer:
             )
 
             agent_returns += step_data["rewards"]
+            base_agent_returns += step_data["reward_info"][
+                "base_rewards"
+            ]
             total_power += float(
                 step_data["service_info"]["total_power"]
             )
@@ -1469,6 +1643,16 @@ class HSACOnlineTrainer:
             total_movement_distance += float(
                 np.sum(step_data["move_info"]["distance"])
             )
+            total_wasted_move += float(
+                np.sum(step_data["reward_info"]["wasted_move"])
+            )
+            total_goal_completions += int(
+                np.sum(
+                    step_data["reward_info"][
+                        "new_goal_completion"
+                    ]
+                )
+            )
 
             if (
                 self.env.step_count % self.progress_interval == 0
@@ -1479,7 +1663,8 @@ class HSACOnlineTrainer:
                     f"episode={self.current_episode}/{self.num_episodes} | "
                     f"step={self.env.step_count}/{self.max_steps} | "
                     f"global={self.global_step} | "
-                    f"return={np.mean(agent_returns):.3f} | "
+                    f"return={np.mean(base_agent_returns):.3f} | "
+                    f"objective={np.mean(agent_returns):.3f} | "
                     f"reward={np.mean(step_data['rewards']):.3f} | "
                     f"{self._loss_progress_text(losses)}"
                 )
@@ -1489,11 +1674,15 @@ class HSACOnlineTrainer:
             "epsilon": float(epsilon),
             "steps": int(self.env.step_count),
             "global_step": int(self.global_step),
-            "team_return": float(np.mean(agent_returns)),
-            "agent_returns": agent_returns,
+            "team_return": float(np.mean(base_agent_returns)),
+            "agent_returns": base_agent_returns,
+            "shaped_team_return": float(np.mean(agent_returns)),
+            "shaped_agent_returns": agent_returns,
             "total_power": total_power,
             "total_risk_events": total_risk_events,
             "total_movement_distance": total_movement_distance,
+            "total_wasted_move": total_wasted_move,
+            "total_goal_completions": total_goal_completions,
             "final_mean_aoi": float(np.mean(self.env.aoi)),
             "initial_uav_locations": initial_uav_locations,
             "initial_device_coord": initial_device_coord,
@@ -1606,7 +1795,15 @@ class HSACOnlineTrainer:
             self.num_uavs,
             dtype=np.int32,
         )
+        goal_completed = np.zeros(
+            self.num_uavs,
+            dtype=np.bool_,
+        )
         agent_returns = np.zeros(
+            self.num_uavs,
+            dtype=np.float32,
+        )
+        base_agent_returns = np.zeros(
             self.num_uavs,
             dtype=np.float32,
         )
@@ -1637,15 +1834,23 @@ class HSACOnlineTrainer:
             next_state, done, service_info = eval_env.service_step(
                 service_actions
             )
-            rewards = self.calculate_step_rewards(
+            rewards, reward_info = self.calculate_step_rewards(
                 state=state,
                 moved_state=moved_state,
                 next_state=next_state,
                 move_info=move_info,
                 service_info=service_info,
+                move_actions=move_actions,
+                goals=goals,
+                goal_completed=goal_completed,
+                return_info=True,
             )
+            goal_completed |= reward_info[
+                "new_goal_completion"
+            ]
 
             agent_returns += rewards
+            base_agent_returns += reward_info["base_rewards"]
             total_power += float(service_info["total_power"])
             total_risk_events += int(
                 np.sum(move_info["risk_triggered"])
@@ -1673,12 +1878,15 @@ class HSACOnlineTrainer:
                     refresh_mask
                 ]
                 goal_durations[refresh_mask] = 0
+                goal_completed[refresh_mask] = False
 
             state = next_state
 
         return {
-            "team_return": float(np.mean(agent_returns)),
-            "agent_returns": agent_returns,
+            "team_return": float(np.mean(base_agent_returns)),
+            "shaped_team_return": float(np.mean(agent_returns)),
+            "agent_returns": base_agent_returns,
+            "shaped_agent_returns": agent_returns,
             "steps": int(eval_env.step_count),
             "total_power": total_power,
             "total_risk_events": total_risk_events,
@@ -1716,6 +1924,13 @@ class HSACOnlineTrainer:
             ],
             dtype=np.float32,
         )
+        shaped_team_returns = np.asarray(
+            [
+                result["shaped_team_return"]
+                for result in episode_results
+            ],
+            dtype=np.float32,
+        )
         eval_record = {
             "training_episode": int(self.current_episode),
             "global_step": int(self.global_step),
@@ -1723,6 +1938,10 @@ class HSACOnlineTrainer:
             "mean_return": float(np.mean(team_returns)),
             "std_return": float(np.std(team_returns)),
             "episode_returns": team_returns,
+            "mean_shaped_return": float(
+                np.mean(shaped_team_returns)
+            ),
+            "shaped_episode_returns": shaped_team_returns,
             "mean_steps": float(
                 np.mean(
                     [
@@ -1784,6 +2003,7 @@ class HSACOnlineTrainer:
             "state": step_data["state"],
             "goals": step_data["goals"],
             "move_actions": step_data["move_actions"],
+            "executed_moves": step_data["move_info"]["movement"],
             "moved_state": step_data["moved_state"],
             "service_actions": step_data["service_actions"],
             "rewards": step_data["rewards"],
@@ -1805,6 +2025,18 @@ class HSACOnlineTrainer:
             ],
             "movement_distance": step_data["move_info"][
                 "distance"
+            ],
+            "base_rewards": step_data["reward_info"][
+                "base_rewards"
+            ],
+            "goal_progress": step_data["reward_info"][
+                "goal_progress"
+            ],
+            "new_goal_completion": step_data["reward_info"][
+                "new_goal_completion"
+            ],
+            "wasted_move": step_data["reward_info"][
+                "wasted_move"
             ],
             "done": step_data["done"],
         }
@@ -2187,6 +2419,11 @@ class HSACOnlineTrainer:
             "energy_weight": self.energy_weight,
             "risk_penalty": self.risk_penalty,
             "risk_probability": self.risk_probability,
+            "goal_progress_weight": self.goal_progress_weight,
+            "wasted_move_weight": self.wasted_move_weight,
+            "goal_completion_bonus": self.goal_completion_bonus,
+            "critic_state_contract": "moved_state",
+            "reward_credit_assignment": "local_power_and_risk",
             "high_interval": self.high_interval,
             "high_gamma": self.high_gamma,
             "low_gamma": self.low_gamma,
@@ -2265,6 +2502,14 @@ class HSACOnlineTrainer:
                     "-mean_aoi - energy_weight*mean(power) "
                     "- risk_penalty*mean(risk_triggered)"
                 ),
+                "training_reward_formula": (
+                    "-mean_aoi - energy_weight*power_i "
+                    "- risk_penalty*risk_i "
+                    "+ goal_progress shaping "
+                    "- wasted_move shaping "
+                    "+ first_goal_completion bonus"
+                ),
+                "critic_state_contract": "moved_state",
                 "replay_buffers_in_checkpoint": False,
             },
             "agent": (
@@ -2292,8 +2537,14 @@ class HSACOnlineTrainer:
                 "steps": record["steps"],
                 "global_step": record["global_step"],
                 "team_return": record["team_return"],
+                "shaped_team_return": record[
+                    "shaped_team_return"
+                ],
                 "agent_returns": json.dumps(
                     record["agent_returns"]
+                ),
+                "shaped_agent_returns": json.dumps(
+                    record["shaped_agent_returns"]
                 ),
                 "total_power": record["total_power"],
                 "total_risk_events": record[
@@ -2301,6 +2552,12 @@ class HSACOnlineTrainer:
                 ],
                 "total_movement_distance": record[
                     "total_movement_distance"
+                ],
+                "total_wasted_move": record[
+                    "total_wasted_move"
+                ],
+                "total_goal_completions": record[
+                    "total_goal_completions"
                 ],
                 "final_mean_aoi": record["final_mean_aoi"],
             }
@@ -2314,10 +2571,14 @@ class HSACOnlineTrainer:
                 "steps",
                 "global_step",
                 "team_return",
+                "shaped_team_return",
                 "agent_returns",
+                "shaped_agent_returns",
                 "total_power",
                 "total_risk_events",
                 "total_movement_distance",
+                "total_wasted_move",
+                "total_goal_completions",
                 "final_mean_aoi",
             ),
             episode_rows,
@@ -2334,6 +2595,12 @@ class HSACOnlineTrainer:
                 "std_return": record["std_return"],
                 "episode_returns": json.dumps(
                     record["episode_returns"]
+                ),
+                "mean_shaped_return": record[
+                    "mean_shaped_return"
+                ],
+                "shaped_episode_returns": json.dumps(
+                    record["shaped_episode_returns"]
                 ),
                 "mean_steps": record["mean_steps"],
                 "mean_total_power": record[
@@ -2355,6 +2622,8 @@ class HSACOnlineTrainer:
                 "mean_return",
                 "std_return",
                 "episode_returns",
+                "mean_shaped_return",
+                "shaped_episode_returns",
                 "mean_steps",
                 "mean_total_power",
                 "mean_risk_events",

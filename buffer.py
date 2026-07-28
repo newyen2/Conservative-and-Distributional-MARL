@@ -63,6 +63,7 @@ class LowLevelReplayBuffer:
                 "done",
                 "action_mask",
                 "next_action_mask",
+                "executed_move",
             ],
         )
 
@@ -79,6 +80,7 @@ class LowLevelReplayBuffer:
         done,
         action_mask=None,
         next_action_mask=None,
+        executed_move=None,
     ):
         """複製並保存一筆低層 transition，避免外部陣列後續更新污染資料。"""
         experience = self.experience(
@@ -102,6 +104,12 @@ class LowLevelReplayBuffer:
             done=bool(np.asarray(done).item()),
             action_mask=self._copy_mask(action_mask),
             next_action_mask=self._copy_mask(next_action_mask),
+            executed_move=np.asarray(
+                move_action
+                if executed_move is None
+                else executed_move,
+                dtype=np.float32,
+            ).reshape(-1).copy(),
         )
         self.memory.append(experience)
 
@@ -128,6 +136,9 @@ class LowLevelReplayBuffer:
             ),
             "moved_states": self._float_tensor(
                 np.stack([item.moved_state for item in experiences])
+            ),
+            "executed_moves": self._float_tensor(
+                np.stack([item.executed_move for item in experiences])
             ),
             "service_actions": self._long_tensor(
                 [item.service_action for item in experiences]
