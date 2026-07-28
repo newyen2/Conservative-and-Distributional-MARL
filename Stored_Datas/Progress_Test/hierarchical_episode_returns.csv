@@ -1,0 +1,2 @@
+﻿episode,epsilon,steps,global_step,team_return,agent_returns,total_power,total_risk_events,total_movement_distance,final_mean_aoi
+1,0.999802,2,4,-14.500810623168945,"[-14.500810623168945, -14.500810623168945]",0.04040324140805751,0,5.7647974491119385,2.5

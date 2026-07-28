@@ -1,0 +1,2 @@
+﻿training_episode,global_step,num_episodes,mean_return,std_return,episode_returns,mean_steps,mean_total_power,mean_risk_events,mean_final_aoi
+1,4,1,-17.666229248046875,0.0,[-17.666229248046875],2.0,0.05306491628289223,0.0,2.6

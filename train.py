@@ -9,7 +9,8 @@ from SAC_Online import Train_SAC_Online
 
 
 # 選擇訓練模型
-def train(model, device_coord, risky_region):    
+def train(model, device_coord, risky_region):
+    # TODO(HRL): 階層式介面完成後需新增獨立 model 分支並呼叫 Train_Hierarchical_Online；目前保留 SAC 路徑。
     # 由Online SAC生成離線資料集
     if (model=="SAC"):
         Train_SAC_Online(device_coord, risky_region)

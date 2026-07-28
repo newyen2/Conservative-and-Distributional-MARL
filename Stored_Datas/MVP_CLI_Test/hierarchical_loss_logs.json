@@ -1,0 +1,128 @@
+[
+  {
+    "episode": 1,
+    "episode_step": 1,
+    "global_step": 5,
+    "losses": {
+      "agent_0": {
+        "high_loss": 5.895147323608398,
+        "critic_1_loss": 26.835891723632812,
+        "critic_2_loss": 28.19864273071289,
+        "move_actor_loss": -0.7298091650009155,
+        "service_actor_loss": -0.27259308099746704
+      },
+      "agent_1": {
+        "high_loss": 6.398932933807373,
+        "critic_1_loss": 22.61148452758789,
+        "critic_2_loss": 28.61444664001465,
+        "move_actor_loss": -0.0895320475101471,
+        "service_actor_loss": 0.19366160035133362
+      }
+    }
+  },
+  {
+    "episode": 1,
+    "episode_step": 2,
+    "global_step": 6,
+    "losses": {
+      "agent_0": {
+        "high_loss": 10.71851921081543,
+        "critic_1_loss": 167.58729553222656,
+        "critic_2_loss": 169.58731079101562,
+        "move_actor_loss": -0.7190250158309937,
+        "service_actor_loss": -0.28984305262565613
+      },
+      "agent_1": {
+        "high_loss": 10.394519805908203,
+        "critic_1_loss": 22.69704246520996,
+        "critic_2_loss": 28.58696937561035,
+        "move_actor_loss": -0.29500100016593933,
+        "service_actor_loss": 0.20419523119926453
+      }
+    }
+  },
+  {
+    "episode": 1,
+    "episode_step": 3,
+    "global_step": 7,
+    "losses": {
+      "agent_0": {
+        "high_loss": 22.48750114440918,
+        "critic_1_loss": 252.91603088378906,
+        "critic_2_loss": 257.9825439453125,
+        "move_actor_loss": -0.8926025629043579,
+        "service_actor_loss": -0.22399112582206726
+      },
+      "agent_1": {
+        "high_loss": 22.045055389404297,
+        "critic_1_loss": 22.30401039123535,
+        "critic_2_loss": 28.206472396850586,
+        "move_actor_loss": -0.039281174540519714,
+        "service_actor_loss": 0.20160281658172607
+      }
+    }
+  },
+  {
+    "episode": 2,
+    "episode_step": 1,
+    "global_step": 8,
+    "losses": {
+      "agent_0": {
+        "high_loss": 5.874088287353516,
+        "critic_1_loss": 175.9971923828125,
+        "critic_2_loss": 177.8848419189453,
+        "move_actor_loss": -0.5726945996284485,
+        "service_actor_loss": -0.2758181691169739
+      },
+      "agent_1": {
+        "high_loss": 10.37960147857666,
+        "critic_1_loss": 22.946807861328125,
+        "critic_2_loss": 30.400390625,
+        "move_actor_loss": -0.0974583625793457,
+        "service_actor_loss": 0.220770001411438
+      }
+    }
+  },
+  {
+    "episode": 2,
+    "episode_step": 2,
+    "global_step": 9,
+    "losses": {
+      "agent_0": {
+        "high_loss": 24.97708511352539,
+        "critic_1_loss": 127.6618423461914,
+        "critic_2_loss": 130.4656524658203,
+        "move_actor_loss": -0.22233743965625763,
+        "service_actor_loss": -0.23960044980049133
+      },
+      "agent_1": {
+        "high_loss": 6.3571457862854,
+        "critic_1_loss": 262.9273681640625,
+        "critic_2_loss": 283.87078857421875,
+        "move_actor_loss": 0.14601227641105652,
+        "service_actor_loss": 0.2392922043800354
+      }
+    }
+  },
+  {
+    "episode": 2,
+    "episode_step": 3,
+    "global_step": 10,
+    "losses": {
+      "agent_0": {
+        "high_loss": 24.972246170043945,
+        "critic_1_loss": 272.08038330078125,
+        "critic_2_loss": 277.9925842285156,
+        "move_actor_loss": -0.5475931167602539,
+        "service_actor_loss": -0.19246751070022583
+      },
+      "agent_1": {
+        "high_loss": 22.01862907409668,
+        "critic_1_loss": 48.067466735839844,
+        "critic_2_loss": 55.66279983520508,
+        "move_actor_loss": -0.4031108021736145,
+        "service_actor_loss": 0.23986080288887024
+      }
+    }
+  }
+]

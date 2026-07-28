@@ -8,6 +8,8 @@ from utils import get_config
 
 class SACAgent():
     def __init__(self, state_size, continuous_action_size, discrete_action_size, hidden_size=256, device="cpu"):
+        # TODO(HRL): 後續需初始化 high DQN、MoveActor、SelectActor、兩個 joint Critic 及各自 target/optimizer。
+        # 目前保留 Hybrid SAC 初始化，確保尚未接上新 Trainer 前原本程式仍可執行。
         config = get_config()
 
         self.state_size = state_size
@@ -135,6 +137,7 @@ class SACAgent():
         return q_values
     
     def get_action(self, state, deterministic=False):
+        # TODO(HRL): 此方法仍回傳舊式合併動作；階層式 Trainer 應分別呼叫 goal、move 與 service 介面。
         if isinstance(state, np.ndarray):
             state = torch.from_numpy(state).float().to(self.device)
         else:
@@ -156,6 +159,7 @@ class SACAgent():
         return [discrete_action, continuous_action]
         
     def Learn_SAC(self, experiences):
+        # TODO(HRL): 此為舊 Hybrid SAC 更新；階層式版本需拆成 Learn_High 與 Learn_Low。
         states, actions, rewards, next_states, dones = experiences
 
         states = states.float().to(self.device)
@@ -226,12 +230,45 @@ class SACAgent():
             "actor_loss": actor_loss.item()
         }
 
+    def initialize_hierarchical_networks(self, hidden_size=256):
+        """新增理由：將階層式網路建立集中在單一入口，且不直接移除目前 Hybrid SAC 初始化流程。"""
+        pass
+
+    def goal_to_onehot(self, goals):
+        """新增理由：將高層選定的裝置索引轉成 M 維條件向量，而不是把 DQN 的 Q-values 當成 goal。"""
+        pass
+
+    def select_high_goal(self, state, epsilon=0.0, deterministic=False):
+        """新增理由：高層 DQN 需以 epsilon-greedy 選擇目標，並由 Trainer 在 n 步內持續沿用。"""
+        pass
+
+    def sample_move(self, states, goals, deterministic=False):
+        """新增理由：MoveActor 應只根據 S 與高層 goal 產生受移動上限約束的連續動作。"""
+        pass
+
+    def sample_service(self, moved_states, goals, action_mask=None, deterministic=False):
+        """新增理由：SelectActor 必須在移動完成取得 S' 後，才依 goal 與合法動作遮罩選擇服務目標。"""
+        pass
+
+    def build_joint_critic_input(self, states, goals, move_actions, service_actions):
+        """新增理由：統一拼接 S、goal、move 與 service one-hot，避免兩個 actor 對 Critic 輸入定義不一致。"""
+        pass
+
+    def Learn_High(self, experiences):
+        """新增理由：高層需以獨立 DQN/target DQN 更新，並處理每段 goal duration 對應的折扣。"""
+        pass
+
+    def Learn_Low(self, experiences):
+        """新增理由：低層兩個 actor 需透過相同 joint twin Critic 的 Q-value 協同更新。"""
+        pass
+
     # Soft-Update目標網路     
     def soft_update(self, local_model, target_model):
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
 
     def get_parameter(self):
+        # TODO(HRL): 後續需加入 high/low learning rate、目標更新、熵係數與 high interval 等參數。
         return {
             "model": "agent_Online_SAC",
             "tau": self.tau,

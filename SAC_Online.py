@@ -12,6 +12,7 @@ from tqdm import tqdm
 import sys
 
 def Train_SAC_Online(device_coord,Risky_region):
+    # TODO(HRL): 此函式保留舊 Hybrid SAC 訓練流程；階層式時序與雙 replay buffer 將由新入口負責。
     torch.cuda.synchronize()
     start_time = time.perf_counter()
 
@@ -231,3 +232,18 @@ def Train_SAC_Online(device_coord,Risky_region):
     step_df = pd.DataFrame(step_df)
     step_src = fr"{config.PATH}\Stored_Datas\step.parquet"
     step_df.to_parquet(step_src, engine="pyarrow")
+
+
+def select_high_goals(agents, states, epsilon, deterministic=False):
+    """新增理由：集中為每台 UAV 選擇一次高層 goal，之後由 Trainer 固定沿用 n 個環境步。"""
+    pass
+
+
+def collect_hierarchical_step(env, agents, states, goals, deterministic=False):
+    """新增理由：固定執行 move、產生 S'、選 service、提交環境的順序，避免訓練與評估時序不同。"""
+    pass
+
+
+def Train_Hierarchical_Online(device_coord, Risky_region):
+    """新增理由：以獨立入口管理高低層更新頻率及兩種 buffer，避免改壞仍可參考的舊 Trainer。"""
+    pass
